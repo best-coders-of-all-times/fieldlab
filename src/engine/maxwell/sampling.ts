@@ -30,6 +30,17 @@ export class MaxwellSampler {
     return this.core.synchronizedB(axis as 0 | 1 | 2, c);
   }
 
+  /** Native component projection. Constitutive line integrals often need
+   * only one field component; avoid evaluating unused synchronized curls. */
+  sampleProjection(p: Vec3, field: 'E' | 'B', direction: Vec3) {
+    const electric = [this.core.Ex, this.core.Ey, this.core.Ez];
+    let result = 0;
+    for (let a = 0; a < 3; a++) if (direction[a] !== 0) result += direction[a] * (field === 'E'
+      ? this.interpolate(p, E_OFF[a], c => electric[a][c])
+      : this.interpolate(p, B_OFF[a], c => this.synchronizedB(a, c)));
+    return result;
+  }
+
   sampleEB(p: Vec3) {
     const s = this.core, es = [s.Ex, s.Ey, s.Ez];
     const E = es.map((e, a) => this.interpolate(p, E_OFF[a], c => e[c])) as Vec3;

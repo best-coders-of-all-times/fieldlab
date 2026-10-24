@@ -80,7 +80,11 @@ The binary jump is a plausible source of this broadband error: each node switche
 
 The incident residuals are 0.0227577%/0.0110848%. This prototype reaches 1% for the selected carrier and residual metrics, with amplitude and residual errors improving by about a factor of two. Explicit constitutive current and interface transport are not asserted to provide second-order accuracy. The prototype has not been integrated into the 3D scene adapter by this validation change.
 
-## Minimal next interface work and limits
+## Scene-adapter scope update
+
+The 3D scene adapter now carries conducting nodes/edges with the moving body and uses deposition-adjoint Ohm voltage gathers, following a demonstrated subcell charge-pinning defect in a binary mask. The two Eulerian half-space cases above remain independent constitutive/interface benchmarks. They do not directly validate that newer material graph. Its low-speed capacitor measurements and remaining limits are recorded in [the moving-source report](maxwell-moving-validation.md).
+
+## Further interface work and limits
 
 A focused next step is to carry a material volume fraction at each electric location, evaluate its swept occupancy over the same timestep as the current, and use that fraction consistently in constitutive integration. The planar fractional result supports testing this approach. Generalizing it requires consistent initial conductor preparation and conservative transfer of body-owned free/surface charge across swept cells. Multiplying sigma by a smoothed mask while retaining incompatible initial fields or charge transport is insufficient.
 

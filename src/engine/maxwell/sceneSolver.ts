@@ -13,15 +13,15 @@ import { YeeSolver } from './yee';
 import { initializeElectric } from './initialization';
 import { createOpenInitializer } from './openInitialization';
 import { MaxwellSampler, cross } from './sampling';
-import { depositCharge, depositTrajectory } from './deposition';
+import { depositCharge, depositTrajectory, trajectoryWeights } from './deposition';
 import { advanceParticle, momentumFromVelocity, validateSubluminalVelocity } from './dynamics';
 import { buildMagnetizationSources, magnetizationCurrent, polarizationCharge, type MagnetVectorField } from './magnetization';
 import { advanceRigidBody } from './rigid';
 import { makeFilamentGeometry, type FilamentGeometry } from './conductingFilament';
-import { movingOhmCurrent } from './materials';
 
 // Particle momentum is staggered at time-dt/2, as in the PIC leapfrog.
 interface BodyState { position: Vec3; rotation: Vec3; velocity: Vec3; angularVelocity: Vec3; momentum: Vec3; }
+interface ConductingLattice { local: Vec3[]; charge: Float64Array; initialCharge: Float64Array; edges: { from: number; to: number; conductance: number }[]; }
 interface ChargeElement { object: SceneObject; local: Vec3; charge: number; }
 const OFF: Vec3[] = [[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]];
 type ConductingBody = ConductorObject | WireObject | LoopObject | CoilObject;
@@ -57,8 +57,9 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   private initialBodyCharge = new Map<string, Float64Array>();
   private conductorLoss = 0;
   private filaments = new Map<string, FilamentGeometry>();
-  private bodyCurrentScratch?: Float64Array[];
-  private conductingEdges?: Uint8Array;
+  private lattices = new Map<string, ConductingLattice>();
+  private conductingEdges?: Int32Array;
+  private dampingRows?: Float64Array;
   private materialOhmLimit?: number;
   private motionKinematics = new Map<string, { time: number; center: Vec3; linear: Vec3; omega: Vec3 }>();
 
@@ -114,6 +115,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       for (let c = 0; c < core.rho.length; c++) core.rho[c] += boundCharge[c];
     }
     this.initializeElectrodes();
+    this.initializeConductingLattices();
     this.buildImpressedCurrents();
     this.initializeMagnetic();
     core.captureStaticBackground();
@@ -239,7 +241,9 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     if (object.dynamics?.mode === 'fixed') return [0, 0, 0];
     if (object.dynamics?.mode === 'forceDriven' || usesParticleDynamics(object)) {
       const r = world.map((v, a) => v - body.position[a]) as Vec3, spin = cross(body.angularVelocity, r);
-      return body.velocity.map((v, a) => v + spin[a]) as Vec3;
+      const velocity = body.velocity.map((v, a) => v + spin[a]) as Vec3;
+      if (object.dynamics?.mode === 'forceDriven' && !isCharge(object) && !isParticle(object) && Math.hypot(...velocity) > 0.01 * C_LIGHT) throw new Error(`${object.name}: rigid-body material-point speed exceeds the nonrelativistic mechanics range (0.01c). Reduce translation or angular velocity.`);
+      return velocity;
     }
     let kinematics = this.motionKinematics.get(object.id);
     if (!kinematics || kinematics.time !== time) {
@@ -392,82 +396,106 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     }
   }
 
+  private initializeConductingLattices() {
+    const s = this.core, dv = s.dx * s.dy * s.dz, ds = [s.dx, s.dy, s.dz], stride = [1, s.nx, s.nx * s.ny];
+    for (const original of this.scene.objects) if (original.visible && isConductingBody(original)) {
+      const object = this.pose(original, 0) as ConductingBody, rho = this.bodyCharge.get(original.id)!;
+      const indices = new Int32Array(s.rho.length).fill(-1), cells: number[] = [], local: Vec3[] = [], charge: number[] = [];
+      for (let k = 1; k < s.nz - 1; k++) for (let j = 1; j < s.ny - 1; j++) for (let i = 1; i < s.nx - 1; i++) {
+        const p = this.point(i, j, k), c = i + s.nx * (j + s.ny * k);
+        if (!this.bodyContains(object, p)) continue;
+        indices[c] = local.length; cells.push(c); local.push(worldToLocal(object, p)); charge.push(rho[c] * dv);
+      }
+      const edges: ConductingLattice['edges'] = [], sigma = original.conductivity ?? 0.01;
+      for (const c of cells) for (let a = 0; a < 3; a++) {
+        const next = c + stride[a];
+        if (indices[next] >= 0) edges.push({ from: indices[c], to: indices[next], conductance: sigma * dv / ds[a] ** 2 });
+      }
+      if (!edges.length) throw new Error(`${original.name}: no connected material edges are resolved. Increase its physical thickness or grid resolution.`);
+      const values = new Float64Array(charge);
+      this.lattices.set(original.id, { local, edges, charge: values, initialCharge: values.slice() });
+    }
+  }
+
   private conductorCurrents() {
-    const s = this.core, currents = [s.Jx, s.Jy, s.Jz];
-    const ds = [s.dx, s.dy, s.dz], strides = [1, s.nx, s.nx * s.ny], dims = [s.nx, s.ny, s.nz], dv = s.dx * s.dy * s.dz;
+    const s = this.core, arrays = [s.Ex, s.Ey, s.Ez], currents = [s.Jx, s.Jy, s.Jz], dv = s.dx * s.dy * s.dz;
     this.forces.clear();
-    const bodies = this.scene.objects.filter((o): o is ConductingBody => o.visible && isConductingBody(o));
-    if (!bodies.length) return;
-    const ownJ = this.bodyCurrentScratch ??= [new Float64Array(s.rho.length), new Float64Array(s.rho.length), new Float64Array(s.rho.length)];
-    const dampingLimit = this.explicitOhmLimit();
-    const occupied = bodies.length > 1 ? this.conductingEdges ??= new Uint8Array(s.rho.length) : undefined;
-    occupied?.fill(0);
-    for (const original of bodies) {
-      const object = this.pose(original) as ConductingBody, rho = this.bodyCharge.get(original.id)!;
-      let bounds: { min: Vec3; max: Vec3 };
-      if (isConductor(object)) bounds = objectBoundingBox(object);
-      else {
-        const geometry = this.filaments.get(object.id)!;
-        bounds = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
-        for (let corner = 0; corner < 8; corner++) {
-          const p = localToWorld(object, geometry.min.map((v, a) => corner & (1 << a) ? geometry.max[a] : v) as Vec3);
-          for (let a = 0; a < 3; a++) { bounds.min[a] = Math.min(bounds.min[a], p[a]); bounds.max[a] = Math.max(bounds.max[a], p[a]); }
-        }
+    if (!this.lattices.size) return;
+    const occupied = this.conductingEdges ??= new Int32Array(3 * s.rho.length), rows = this.dampingRows ??= new Float64Array(3 * s.rho.length);
+    occupied.fill(-1); rows.fill(0);
+    let bodyIndex = 0;
+    for (const original of this.scene.objects) {
+      const lattice = this.lattices.get(original.id); if (!lattice) continue;
+      const object = this.pose(original), points = lattice.local.map(p => localToWorld(object, p)), forceDriven = original.dynamics?.mode === 'forceDriven';
+      const force: Vec3 = [0, 0, 0], torque: Vec3 = [0, 0, 0], change = new Float64Array(lattice.charge.length);
+      const addForce = (p: Vec3, f: Vec3) => {
+        const arm = p.map((v, a) => v - object.position[a]) as Vec3, moment = cross(arm, f);
+        for (let a = 0; a < 3; a++) { force[a] += f[a]; torque[a] += moment[a]; }
+      };
+      for (let n = 0; n < points.length; n++) {
+        const velocity = this.velocity(original, points[n], this.time); validateSubluminalVelocity(velocity);
+        const q = lattice.charge[n]; if (q === 0 || !forceDriven) continue;
+        const field = this.sampleForForce(points[n]), vxB = cross(velocity, field.B);
+        addForce(points[n], field.E.map((v, a) => q * (v + vxB[a])) as Vec3);
       }
-      const low = bounds.min.map((v, a) => Math.floor((v - this.min[a]) / ds[a]) - 1);
-      const high = bounds.max.map((v, a) => Math.ceil((v - this.min[a]) / ds[a]) + 1);
-      const sigma = original.conductivity ?? 0.01;
-      const force: Vec3 = [0, 0, 0], torque: Vec3 = [0, 0, 0];
-      ownJ.forEach(j => j.fill(0));
-      for (let k = 0; k < s.nz; k++) for (let j = 0; j < s.ny; j++) for (let i = 0; i < s.nx; i++) {
-        const c = i + s.nx * (j + s.ny * k), cell = [i, j, k];
-        const nearMaterial = i >= low[0] && i <= high[0] && j >= low[1] && j <= high[1] && k >= low[2] && k <= high[2];
-        for (let a = 0; a < 3; a++) {
-          if (cell[a] === dims[a] - 1) continue; // no material charge flux through the backing wall
-          const next = cell[a] + 1 < dims[a] ? c + strides[a] : c - (dims[a] - 1) * strides[a];
-          if (!nearMaterial && rho[c] === 0 && rho[next] === 0) continue;
-          const p = this.point(i, j, k, OFF[a]);
-          // The conductive edge joins two material nodes. This uses the same
-          // staircase geometry as the prepared equipotential, avoiding an
-          // artificial discharge across edges that straddle the interface.
-          const start: Vec3 = [...p], end: Vec3 = [...p]; start[a] -= ds[a] / 2; end[a] += ds[a] / 2;
-          const inside = this.bodyContains(object, start) && this.bodyContains(object, end);
-          if (inside && occupied) {
-            if (occupied[c] & (1 << a)) throw new Error('Conducting bodies overlap or contact on the grid. Electrical contact between separate bodies is not supported; separate them or model one connected wire.');
-            occupied[c] |= 1 << a;
-          }
-          if (!inside && rho[c] === 0 && rho[next] === 0) continue;
-          const field = this.sampleEB(p), velocity = this.velocity(original, p, this.time);
-          validateSubluminalVelocity(velocity);
-          const v2 = velocity.reduce((sum, v) => sum + v * v, 0), gamma = 1 / Math.sqrt(1 - v2 / C_LIGHT ** 2);
-          const adv = velocity[a] * (velocity[a] >= 0 ? rho[c] : rho[next]);
-          const vxB = cross(velocity, field.B);
-          const ohm = inside ? movingOhmCurrent(field.E, field.B, velocity, sigma)[a] : 0;
-          if (sigma * gamma * (1 + Math.sqrt(v2) / C_LIGHT) * s.dt / EPS0 > dampingLimit) throw new Error('Moving material current became too stiff for the combined wave/current timestep. Reduce CFL, refine the grid or choose a lower conductivity.');
-          ownJ[a][c] = adv + ohm;
-          currents[a][c] += ownJ[a][c];
-          // J_cond·(E+v×B) is the lab heat power after subtracting mechanical
-          // Lorentz work. Time integration remains explicit, like this current.
-          this.conductorLoss += s.dt * ohm * (field.E[a] + vxB[a]) * dv;
-          const qDensity = 0.5 * (rho[c] + rho[next]);
-          const jvec: Vec3 = [0, 0, 0]; jvec[a] = adv + ohm;
-          const f = cross(jvec, field.B); f[a] += qDensity * field.E[a];
-          const arm = p.map((v, n) => v - object.position[n]) as Vec3, moment = cross(arm, f);
-          for (let n = 0; n < 3; n++) { force[n] += f[n] * dv; torque[n] += moment[n] * dv; }
+      for (const edge of lattice.edges) {
+        const from = points[edge.from], to = points[edge.to], delta = to.map((v, a) => v - from[a]) as Vec3;
+        const middle = to.map((v, a) => (v + from[a]) / 2) as Vec3;
+        const weights = trajectoryWeights(s, this.gridPoint(from), this.gridPoint(to));
+        let electricVoltage = 0, lengthSum = 0;
+        for (const w of weights) { electricVoltage += arrays[w.axis][w.index] * w.length; lengthSum += Math.abs(w.length); }
+        const velocity = this.velocity(original, middle, this.time);
+        validateSubluminalVelocity(velocity);
+        const beta = Math.hypot(...velocity) / C_LIGHT, gamma = 1 / Math.sqrt((1 - beta) * (1 + beta));
+        const vDotDelta = velocity.reduce((sum, v, a) => sum + v * delta[a], 0), spinStencil = cross(delta, velocity);
+        const motionalVoltage = this.sampleProjection(middle, 'B', spinStencil);
+        const longitudinalVoltage = vDotDelta === 0 ? 0 : vDotDelta / C_LIGHT ** 2 * this.sampleProjection(middle, 'E', velocity);
+        // Covariant Ohm law integrated along the material edge. The adjoint
+        // electric integral preserves a prepared equal-potential graph.
+        const restVoltage = gamma * (electricVoltage + motionalVoltage - longitudinalVoltage);
+        const current = edge.conductance * restVoltage;
+        const ds = [s.dx, s.dy, s.dz];
+        // Bound the actual E stencil: adjoint voltage, point-sampled vv.E,
+        // and the E-curl contribution to synchronized B. This is a row-sum
+        // admission bound, not a complete moving-body energy proof.
+        const voltageBound = lengthSum + Math.abs(vDotDelta) * velocity.reduce((sum, v) => sum + Math.abs(v), 0) / C_LIGHT ** 2
+          + s.dt * spinStencil.reduce((sum, value, a) => sum + Math.abs(value) * (1 / ds[(a + 1) % 3] + 1 / ds[(a + 2) % 3]), 0);
+        change[edge.from] -= current * s.dt; change[edge.to] += current * s.dt;
+        for (const w of weights) {
+          const slot = w.axis * s.rho.length + w.index;
+          if (occupied[slot] >= 0 && occupied[slot] !== bodyIndex) throw new Error('Conducting bodies overlap or contact within the grid current support. Separate them or refine the grid; electrical merging is not supported.');
+          occupied[slot] = bodyIndex;
+          rows[slot] += edge.conductance * gamma * Math.abs(w.length) * voltageBound / dv;
+          currents[w.axis][w.index] += current * w.length / dv;
         }
-      }
-      // Update body-owned charge with exactly its own deposited divergence.
-      // The Maxwell core independently advances total rho from the total J.
-      for (let k = 0; k < s.nz; k++) for (let j = 0; j < s.ny; j++) for (let i = 0; i < s.nx; i++) {
-        const c = i + s.nx * (j + s.ny * k), cell = [i, j, k];
-        let div = 0;
-        for (let a = 0; a < 3; a++) {
-          const previous = cell[a] ? c - strides[a] : c + (dims[a] - 1) * strides[a];
-          div += (ownJ[a][c] - ownJ[a][previous]) / ds[a];
+        if (forceDriven) {
+          const magnetic = cross(delta, this.sampleEB(middle).B).map(v => current * v) as Vec3;
+          addForce(middle, magnetic);
         }
-        rho[c] -= s.dt * div;
+        const driveVoltage = electricVoltage + motionalVoltage;
+        this.conductorLoss += current * driveVoltage * s.dt;
       }
-      this.forces.set(original.id, { force, torque });
+      for (let n = 0; n < lattice.charge.length; n++) lattice.charge[n] += change[n];
+      this.forces.set(original.id, { force, torque }); bodyIndex++;
+    }
+    const limit = this.explicitOhmLimit();
+    for (let a = 0; a < 3; a++) for (let c = 0; c < s.rho.length; c++) if (rows[a * s.rho.length + c] * s.dt / EPS0 > limit)
+      throw new Error('Moving material deposition became too stiff for the combined wave/current timestep. Reduce CFL, refine the grid or choose a lower conductivity.');
+  }
+
+  private transportConductors(before: Map<string, Vec3[]>) {
+    const s = this.core;
+    for (const original of this.scene.objects) {
+      const lattice = this.lattices.get(original.id); if (!lattice) continue;
+      const object = this.pose(original, this.time + s.dt), old = before.get(original.id)!, rho = this.bodyCharge.get(original.id)!;
+      rho.fill(0);
+      for (let n = 0; n < lattice.local.length; n++) {
+        const to = localToWorld(object, lattice.local[n]), q = lattice.charge[n];
+        validateSubluminalVelocity(to.map((v, a) => (v - old[n][a]) / s.dt) as Vec3);
+        if (q === 0) continue;
+        depositTrajectory(s.Jx, s.Jy, s.Jz, s, this.gridPoint(old[n]), this.gridPoint(to), q, s.dt);
+        depositCharge(rho, s, this.gridPoint(to), q);
+      }
     }
   }
 
@@ -510,9 +538,12 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       this.assertMatterInside(this.time);
       s.Jx.set(this.impressed[0]); s.Jy.set(this.impressed[1]); s.Jz.set(this.impressed[2]);
       const before = this.charges.map(c => localToWorld(this.pose(c.object), c.local));
+      const materialBefore = new Map<string, Vec3[]>();
+      for (const o of this.scene.objects) { const lattice = this.lattices.get(o.id); if (lattice) { const pose = this.pose(o); materialBefore.set(o.id, lattice.local.map(p => localToWorld(pose, p))); } }
       this.conductorCurrents();
       this.advanceBodies();
       this.assertMatterInside(this.time + s.dt);
+      this.transportConductors(materialBefore);
       this.charges.forEach((charge, c) => {
         const to = localToWorld(this.pose(charge.object, this.time + s.dt), charge.local);
         const velocity = before[c].map((v, n) => (to[n] - v) / s.dt) as Vec3;
@@ -528,6 +559,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
 
   reset() { this.core.restore(this.initial); this.bodies.clear(); for (const [id, b] of structuredClone(this.initialBodies)) this.bodies.set(id, b); this.forces.clear(); this.mechanicalWork = 0; this.elapsedMs = 0; this.conductorLoss = 0;
     this.bodyCharge = structuredClone(this.initialBodyCharge);
+    for (const lattice of this.lattices.values()) lattice.charge.set(lattice.initialCharge);
     this.motionKinematics.clear();
     if (this.hasMagnets) {
       const sources = buildMagnetizationSources(this.scene, this.core, this.min, 0);

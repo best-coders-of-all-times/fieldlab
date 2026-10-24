@@ -66,9 +66,11 @@ The selected lab/rest-frame finite-conductivity law is:
 J_body = rho_body v + sigma gamma [E + v × B - v(v · E)/c²]
 ```
 
-Conductive edges join resolved material nodes. Body-owned charge is transported through matching discrete divergence, not deleted when voxel membership changes. Geometry is staircased and charge advection upwind. The explicit update requires `sigma gamma dt / epsilon_0 ≤ 0.45`; excessive conductivity gives an error without a hidden cap. The default 0.01 S/m is a demonstration parameter, not a claim to model copper or an ideal conductor at coarse resolution.
+The initially resolved conducting nodes and their neighboring edges move with the body. Ohmic charge transfer uses the electric line integral adjoint to the same CIC trajectory weights used for current deposition. Body motion deposits trajectories of the updated material-node charge. Charge is not pinned by rerasterizing a binary conductivity mask, erased at an interface, or taken from another body's charge. Initial shape remains a numerical staircase carried continuously through the fixed field grid.
 
-Moving-capacitor regressions check magnetic response, replay and charge constraints. They do not establish moving-PEC boundary accuracy, moving-mirror frequency/amplitude, general moving skin response or convergence of arbitrary rotating boundaries. Those remain separate validation requirements.
+The explicit current admission checks the combined wave/current restriction and the actual deposition/gather stencil, including material wave speed, the covariant longitudinal electric correction, and the electric-curl contribution to synchronized B. Excessive stiffness gives an actionable error without capping conductivity. Separate bodies with unresolved overlapping current support are rejected rather than merged. The default 0.01 S/m is a demonstration parameter, not copper or an ideal conductor.
+
+The selected co-translating capacitor benchmark now checks the magnetic relation under mesh refinement at fixed physical PML thickness and a separate domain enlargement. It does not establish moving PEC accuracy, general moving skin response, fed/moving-gap capacitors or arbitrary rotating-boundary convergence. See the moving-source validation report for measured ranges.
 
 ### Impressed permanent magnets
 

@@ -56,6 +56,8 @@ describe('Scene Maxwell solver', () => {
     expect(sample.B[2]).toBeLessThan(0);
     expect(solver.diagnostics().gaussRelative).toBeLessThan(1e-4);
     expect(JSON.stringify(scene)).toBe(authored);
+    solver.reset(); solver.step(20);
+    expect(solver.sample([0, 0, 0])).toEqual(sample);
   });
 
   it('keeps a prepared stationary capacitor free of an unphysical magnetic transient', () => {
@@ -254,6 +256,29 @@ describe('Scene Maxwell solver', () => {
     conductor.potential = 3; scene.objects = [conductor]; scene.simulation.maxwellConductorModel = 'isolated';
     scene.simulation.boundary.x = 'pec';
     expect(() => new MaxwellSceneSolver(scene)).toThrow(/contact|PEC|wall/i);
+  });
+
+  it('accelerates an isolated conducting body in the direction of its net-charge force', () => {
+    const velocities = [-1, 1].map(sign => {
+      const scene = chargedScene(), conductor = makeConductor([0, 0, 0], 'box', [0.25, 0.25, 0.25]);
+      conductor.floating = true; conductor.netCharge = sign * 1e-12;
+      conductor.dynamics = { mode: 'forceDriven', mass: 1e-20, inertia: [1, 1, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0] };
+      scene.objects = [conductor]; scene.simulation.maxwellConductorModel = 'isolated'; scene.simulation.externalField = [1e5, 0, 0];
+      const solver = new MaxwellSceneSolver(scene); solver.step();
+      expect(solver.diagnostics().gaussRelative).toBeLessThan(1e-8);
+      return solver.bodies.get(conductor.id)!.velocity[0];
+    });
+    expect(velocities[0]).toBeLessThan(-100); expect(velocities[1]).toBeGreaterThan(100);
+    expect(Math.abs(velocities[0] + velocities[1])).toBeLessThan(0.01 * velocities[1]);
+  });
+
+  it('rejects superluminal material nodes even when the conductor is neutral', () => {
+    const scene = chargedScene(), conductor = makeConductor([0, 0, 0], 'box', [0.25, 0.25, 0.01]);
+    conductor.potential = 0; conductor.conductivity = 0.0001;
+    const omega = 0.95 * 299792458 / 0.15625;
+    conductor.motion = { kind: 'spin', axis: [0, 0, 1], amplitude: 0, frequency: omega / (2 * Math.PI) };
+    scene.objects = [conductor]; scene.simulation.maxwellConductorModel = 'isolated';
+    expect(() => { const solver = new MaxwellSceneSolver(scene); solver.step(); }).toThrow(/speed|light|velocity/i);
   });
 
 });
