@@ -2,13 +2,13 @@
 
 ## READ FIRST: current recovery state
 
-- The next CPML checkpoint contains the physical-width correction, four regressions, the two maintained measurement tools and their reports. Run `git log -3 --oneline` for its exact hash. Earlier production checkpoint `07a8900` and pre-Maxwell rollback tag remain preserved.
+- Latest physics checkpoint: **`bd28021`**, with the physical-width CPML correction, four regressions, the two maintained measurement tools and their reports. Additional handoff-only commits may follow it. Earlier production checkpoint `07a8900` and the pre-Maxwell rollback tag remain preserved.
 - **253 unit tests in 51 files pass; production build passes.** All four new tests were observed failing with the old profile, then the corrected source was restored exactly. Independent numerical review found no actionable defect.
 - Full corrected 17-case audit completed: `artifacts/maxwell-pml-corrected-17.json`, all selected finite-window targets pass, source hashes unchanged and verified against actual files. Normal-pulse tail R = 3.2214607e-7 through ct = 14 m, versus old R = 0.0021343; sine control R = 3.6420154e-7. The normal maximum now stays at ct = 1.242 m across extended windows.
 - **Open:** the 45-degree packet still has a rising late tail, R = 1.3855266e-5 at the ct = 6 m endpoint. It is below target in that window but not converged in time. Do not mark general M3 or the entire Maxwell migration accepted.
 - Browser flows: 15 pass in the full corrected run; the first approximation test hits its known 30-second cold-readiness timeout. Its isolated recheck passes (44.7-second test, 47.4-second run). Every flow has passed across those runs; do not claim a single-run 16/16 pass for this correction.
 - Both measurement tools pass independent spec and quality review. Browser uncaught-page exceptions now fail measurement, with an actual injected-exception failure check. Browser performance numbers remain explicitly historical at `07a8900`, before the CPML correction; the historical artifact is preserved.
-- No runtime jobs need to continue after the corrected audit finishes. Next priorities: investigate the 45-degree late tail and cold development-startup flake, then the remaining M5/M6/M7 gates. Reproduce from maintained scripts; do not repeat completed regressions or silently tune away failed acceptance.
+- The corrected audit is finished; no runtime jobs remain. Next priorities: investigate the 45-degree late tail and cold development-startup flake, then the remaining M5/M6/M7 gates. Reproduce from maintained scripts; do not repeat completed regressions or silently tune away failed acceptance.
 - Detailed notes below include earlier chronological states. This section supersedes stale running-job and source-hold notes.
 
 ## User objective and authorization
@@ -107,3 +107,7 @@ IndependentCPMLfixreview: SPEC/codequality/physicalvalidityclean; noteslimitedin
 ## Final audit now active
 
 The isolated browser recheck exited0; all16flows have passed on correctedproduction across the15-pass fullrun plus1isolatedrecheck, but the fullrun retains its cold-start failure. PMLagent is NOWRUNNING completecorrected17cases, outputartifacts/maxwell-pml-corrected-17.json, sourceheldunchanged. Allotherreviewsareclean. Remainingcheckpointwork: inspectthatartifact/report and UTF8/sourcehashes, finaldiffcheck, updatethisfile, stageexact10files andcommit. Newtests/sourcealreadyverified253unit+build. README/corevalidationnoteslabeloldmeasurements historical. Noadditionalphysicschangesneeded unlesscorrected17findsnewfailure.
+
+## Checkpoint saved
+
+Physics/tools/docs checkpoint `bd28021` is committed on `feature/maxwell-engine`. Both task reviews and the numerical correction review are clean. The measured artifacts remain ignored; the versioned tools/reports preserve reproduction. Final source checks and staged whitespace checks passed. No push or merge was performed. Continue at the open 45-degree late-tail and cold-start investigation, with the full plan gates above still pending.
