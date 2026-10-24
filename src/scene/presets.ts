@@ -61,6 +61,19 @@ function wavesScene(name: string, subtitle: string, description: string): Scene 
   return s;
 }
 
+const maxwellDemoClock = 'Motion is authored at 10 MHz so it changes on the nanosecond FDTD clock. These are physical source frequencies: neither time nor the speed of light is secretly rescaled. The coarse finite grid is an experimental demonstration, not a converged physical prediction.';
+
+function maxwellDemoScene(name: string, description: string): Scene {
+  const s = fieldsScene(name, 'Experimental · physical field time', description);
+  s.domain = { center: [0, 0, 0], size: [1, 1, 1] };
+  s.simulation = { ...defaultSimulation(), useApproximation: false,
+    resolution: 16, pmlCells: 4, cfl: 0.9, stepsPerFrame: 2,
+    boundary: { x: 'pml', y: 'pml', z: 'pml' } };
+  s.display = { ...defaultDisplay(), fieldLines: 'none', lineCount: 8, arrows: 'B', arrowDensity: 5,
+    sliceResolution: 64, sliceQuantity: 'Bmag', colormap: 'inferno', conductorOpacity: 0.6 };
+  return s;
+}
+
 function setDisplay(s: Scene, patch: Partial<Scene['display']>): Scene {
   s.display = { ...s.display, ...patch };
   return s;
@@ -968,9 +981,61 @@ export const PRESETS: Preset[] = [
       return s;
     },
   },
+  {
+    id: 'maxwell-moving-capacitor',
+    title: 'Maxwell: moving isolated capacitor',
+    group: 'Maxwell FDTD',
+    subtitle: 'Experimental · transported plate charge and B',
+    description: 'Finite-conductivity plates start from ±3 V, then move together in isolation. No voltage clamp, hidden wires or battery. ' + maxwellDemoClock,
+    tags: ['experimental', 'isolated electrodes', 'physical time'],
+    create: () => {
+      const s = maxwellDemoScene('Maxwell: moving isolated capacitor', 'Experimental finite-conductivity plates initialized at ±3 V, then isolated and moved on physical field time.');
+      s.simulation.maxwellConductorModel = 'isolated';
+      const positive = makeConductor([-0.125, 0, 0], 'box', [0.08, 0.5, 0.5]);
+      const negative = makeConductor([0.125, 0, 0], 'box', [0.08, 0.5, 0.5]);
+      positive.name = 'Initially +3 V isolated plate'; positive.potential = 3;
+      negative.name = 'Initially −3 V isolated plate'; negative.potential = -3;
+      for (const plate of [positive, negative]) {
+        plate.conductivity = 0.01;
+        plate.motion = { kind: 'oscillate', axis: [0, 1, 0], amplitude: 0.02, frequency: 1e7, phase: -Math.PI / 2 };
+      }
+      const probe = makeProbe([0, 0, 0]); probe.quantity = 'B';
+      s.objects = [positive, negative, probe];
+      s.theory = {
+        title: 'Experimental moving isolated electrodes',
+        body: 'Authored potentials prepare initial plate charge once. The supplies are then disconnected: charge/current and E/B evolve with a finite conductivity of 0.01 S/m. Both plates begin at rest at the lower end of their prescribed y oscillation; the external drive supplies their motion. Observe the magnetic response as transported charge accelerates. This material model is not a validated moving perfect conductor, and its energy/momentum diagnostics do not form a closed ledger. ' + maxwellDemoClock,
+        prompts: ['Play or single-step, then compare physical time, B and plate poses.', 'Rewind preserves authored settings; Replay repeats the same initialization.', 'Refine the grid and boundaries before interpreting field amplitudes quantitatively.'],
+      };
+      return s;
+    },
+  },
+  {
+    id: 'maxwell-passive-pickup',
+    title: 'Maxwell: passive pickup loop',
+    group: 'Maxwell FDTD',
+    subtitle: 'Experimental · induced material current, no applied I',
+    description: 'A moving impressed magnet excites a resolved finite-conductivity loop. Source switch-on history matters; no voltage feed or imposed loop current. ' + maxwellDemoClock,
+    tags: ['experimental', 'passive loop', 'induction'],
+    create: () => {
+      const s = maxwellDemoScene('Maxwell: passive pickup loop', 'Experimental passive finite-conductivity pickup with prescribed magnet motion and explicit source switch-on history.');
+      const loop = makeLoop([0, 0, 0], 0.25, 0);
+      Object.assign(loop, { name: 'Passive pickup (no applied current)', electricalModel: 'conducting', wireRadius: 0.1, conductivity: 0.01 });
+      const magnet = makeMagnet([0, 0, 0], 0.07, 0.2);
+      magnet.name = 'Prescribed impressed magnet'; magnet.magnetization = 10;
+      magnet.motion = { kind: 'oscillate', axis: [0, 0, 1], amplitude: 0.08, frequency: 1e7, phase: -Math.PI / 2 };
+      const probe = makeProbe([0.25, 0, 0]); probe.quantity = 'B';
+      s.objects = [loop, magnet, probe];
+      s.theory = {
+        title: 'Experimental passive pickup and source history',
+        body: 'The loop has no impressed current: its material current responds to the evolved fields with conductivity 0.01 S/m. Its authored 0.1 m wire radius spans at least three cells across the diameter on this 16-cell grid; geometry is not automatically enlarged. The +z impressed magnet begins at rest at the lower end of its prescribed z oscillation. Initial source switch-on and subsequent motion both contribute to the transient; this is not a pre-existing steady-state magnet history. Inspect Jy and B at the probe, and distinguish stationary material loss, body heat estimates and partial mechanical work. General circuit and closed energy/momentum validation remains incomplete. ' + maxwellDemoClock,
+        prompts: ['Read Jy at the probe inside the pickup material as fields evolve.', 'Compare initial source switch-on with later changes during magnet motion.', 'Pause and single-step to keep fields, source poses and diagnostics on the same physical clock.'],
+      };
+      return s;
+    },
+  },
 ];
 
-export const PRESET_GROUPS = ['Electrostatics', 'Magnetostatics', 'Dynamics', 'Induction', 'Waves'];
+export const PRESET_GROUPS = ['Electrostatics', 'Magnetostatics', 'Dynamics', 'Induction', 'Waves', 'Maxwell FDTD'];
 
 export function getPreset(id: string): Preset | undefined {
   return PRESETS.find((p) => p.id === id);

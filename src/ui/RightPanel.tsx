@@ -656,13 +656,9 @@ function SimulationPanel() {
       <PanelSection title="Grid & solver">
         <Field label="Resolution">
           <Segmented
-            value={String(sim.resolution) as '48' | '64' | '96'}
-            options={[
-              { value: '48', label: '48³' },
-              { value: '64', label: '64³' },
-              { value: '96', label: '96³' },
-            ]}
-            onChange={(v) => setSimulation({ resolution: Number(v) as 48 | 64 | 96 })}
+            value={String(sim.resolution)}
+            options={(fullMaxwell ? [16, 24, 32, 48, 64] : [48, 64, 96]).map(resolution => ({ value: String(resolution), label: `${resolution}³` }))}
+            onChange={(v) => setSimulation({ resolution: Number(v) as typeof sim.resolution })}
           />
         </Field>
         {waves ? (

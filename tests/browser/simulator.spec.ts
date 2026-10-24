@@ -266,3 +266,37 @@ test('Maxwell particles expose a single initial velocity control in Dynamics', a
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Initial velocity', exact: true }).getByRole('spinbutton').first()).toHaveValue('1000000');
 });
+
+test('experimental passive pickup preset runs directly with coherent fields and moving source poses', async ({ page }) => {
+  test.setTimeout(60000);
+  await page.getByRole('button', { name: /Maxwell: passive pickup loop/ }).click();
+  await page.getByRole('button', { name: 'Pause (space)', exact: true }).click();
+  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  await expect(page.locator('.status-chip').filter({ hasText: 'Maxwell FDTD' })).toContainText('experimental');
+  await page.getByRole('button', { name: 'Rewind to t = 0', exact: true }).click();
+  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await expect(page.getByRole('button', { name: '16³', exact: true })).toHaveClass(/active/);
+  await expect(page.getByRole('button', { name: '96³', exact: true })).toHaveCount(0);
+  await page.getByRole('group', { name: 'Steps per frame', exact: true }).getByRole('slider').fill('8');
+  await page.getByRole('button', { name: 'Single step', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).fieldlabFrames.filter((frame: any) => frame.diagnostics).at(-1)?.steps)).toBe(8);
+  const result = await page.evaluate(() => {
+    const scene = JSON.parse(localStorage.getItem('fieldlab.scene.v1')!);
+    const magnet = scene.objects.find((object: any) => object.kind === 'magnet');
+    const frame = (window as any).fieldlabFrames.filter((frame: any) => frame.diagnostics).at(-1);
+    return { frame, magnetId: magnet.id, approximation: scene.simulation.useApproximation };
+  });
+  expect(result.approximation).toBe(false);
+  expect(result.frame.time).toBeCloseTo(8 * result.frame.meta.dt, 20);
+  expect(result.frame.time).toBeGreaterThan(0);
+  expect(result.frame.time).toBeLessThan(2e-9);
+  expect(Math.hypot(...result.frame.probes[0].sample.B)).toBeGreaterThan(0);
+  expect(result.frame.transforms.find((pose: any) => pose.id === result.magnetId).position[2])
+    .toBeCloseTo(-0.08 * Math.cos(2 * Math.PI * 1e7 * result.frame.time), 13);
+  await page.screenshot({ path: 'artifacts/maxwell-passive-preset.png' });
+  await page.getByRole('button', { name: '24³', exact: true }).click();
+  await expect(page.getByRole('button', { name: '24³', exact: true })).toHaveClass(/active/);
+  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('fieldlab.scene.v1')!).simulation.resolution)).toBe(24);
+});

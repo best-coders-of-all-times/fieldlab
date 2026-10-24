@@ -202,8 +202,8 @@ export interface SimulationSettings {
   useApproximation: boolean;
   /** Explicitly initialize from authored voltages/charges, then disconnect supplies. */
   maxwellConductorModel?: 'isolated';
-  /** Number of cells along the longest domain axis (48/64/96). */
-  resolution: 48 | 64 | 96;
+  /** Number of cells along the longest domain axis. Maxwell UI offers 16–64. */
+  resolution: 16 | 24 | 32 | 48 | 64 | 96;
   /** Static solver boundary. */
   staticBoundary: 'grounded' | 'open';
   externalField: Vec3;
