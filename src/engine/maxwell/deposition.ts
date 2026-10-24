@@ -5,6 +5,12 @@ export interface DepositionGrid {
 }
 export type DepositBoundary = 'closed' | 'periodic';
 export type DepositVector = readonly [number, number, number];
+export interface TrajectoryWeight {
+  axis: 0 | 1 | 2;
+  index: number;
+  /** Signed electric-edge line weight, in metres. */
+  length: number;
+}
 type DensityArray = Float64Array | Float32Array;
 
 function validateGrid(g: DepositionGrid, arrays: DensityArray[], boundary: DepositBoundary) {
@@ -68,6 +74,22 @@ export function depositTrajectory(Jx: DensityArray, Jy: DensityArray, Jz: Densit
   validateGrid(grid, [Jx, Jy, Jz], boundary);
   if (!Number.isFinite(q)) throw new Error('Charge must be finite');
   if (!Number.isFinite(dt) || dt <= 0) throw new Error('Deposition dt must be finite and positive');
+  const arrays = [Jx, Jy, Jz], scale = q / (dt * grid.dx * grid.dy * grid.dz);
+  walkTrajectory(grid, oldPosition, newPosition, boundary, (axis, c, _length, spacing, motion, weight) => {
+    // Keep the original multiplication order, so this shared-walker refactor
+    // preserves deposited Float64/Float32 values bit for bit.
+    arrays[axis][c] += scale * spacing * motion * weight;
+  });
+}
+
+type TrajectoryVisitor = (axis: 0 | 1 | 2, index: number, length: number, spacing: number, motion: number, shapeWeight: number) => void;
+
+/** Call only after validating the grid. Endpoint/cell-crossing validation is
+ * completed before emitting anything, preserving atomic closed-domain rejection.
+ * The extra factors let deposition retain its established floating-point order.
+ */
+function walkTrajectory(grid: DepositionGrid, oldPosition: DepositVector, newPosition: DepositVector,
+  boundary: DepositBoundary, visit: TrajectoryVisitor): void {
   const a = coordinates(oldPosition, grid, boundary), b = coordinates(newPosition, grid, boundary);
   const delta = b.map((v, axis) => v - a[axis]);
   const cuts = [0, 1];
@@ -80,8 +102,7 @@ export function depositTrajectory(Jx: DensityArray, Jy: DensityArray, Jz: Densit
     for (let wall = Math.floor(lo) + 1; wall < hi; wall++) cuts.push((wall - a[axis]) / delta[axis]);
   }
   cuts.sort((x, y) => x - y);
-  const h = [grid.dx, grid.dy, grid.dz], arrays = [Jx, Jy, Jz];
-  const scale = q / (dt * grid.dx * grid.dy * grid.dz);
+  const h = [grid.dx, grid.dy, grid.dz];
   for (let segment = 1; segment < cuts.length; segment++) {
     const t0 = cuts[segment - 1], t1 = cuts[segment];
     if (t0 === t1) continue;
@@ -100,8 +121,45 @@ export function depositTrajectory(Jx: DensityArray, Jy: DensityArray, Jz: Densit
         const weight = sy * sz + (dy * sz + sy * dz) / 2 + dy * dz / 3;
         const node = [...base]; node[y] += iy; node[z] += iz;
         const c = index(grid, node[0], node[1], node[2], boundary);
-        if (c >= 0) arrays[axis][c] += scale * h[axis] * motion * weight;
+        if (c >= 0) visit(axis as 0 | 1 | 2, c, h[axis] * motion * weight, h[axis], motion, weight);
       }
     }
   }
+}
+
+/** Geometric line weights of the same CIC trajectory used by depositTrajectory.
+ * Positions are metres from the grid origin; periodic endpoints are unwrapped.
+ * Zero weights are omitted. Repeated {axis,index} entries from different segments
+ * remain in path order: combine them before forming a quadratic/stiffness matrix.
+ */
+export function trajectoryWeights(grid: DepositionGrid, oldPosition: DepositVector, newPosition: DepositVector,
+  boundary: DepositBoundary = 'closed'): TrajectoryWeight[] {
+  validateGrid(grid, [], boundary);
+  const weights: TrajectoryWeight[] = [];
+  walkTrajectory(grid, oldPosition, newPosition, boundary, (axis, index, length) => {
+    if (length !== 0) weights.push({ axis, index, length });
+  });
+  return weights;
+}
+
+/** Adjoint electric gather: integral E dot dl, in volts, with exactly the
+ * geometric trajectory weights used to deposit current. Thus q*integral equals
+ * dt*cellVolume*sum(Jedge*Eedge), to floating-point roundoff. For the compatible
+ * discrete gradient E=-grad(phi), this is CIC(phi,old)-CIC(phi,new).
+ * The streaming walker avoids allocating an intermediate list for each gather.
+ */
+export function trajectoryFieldIntegral(Ex: DensityArray, Ey: DensityArray, Ez: DensityArray, grid: DepositionGrid,
+  oldPosition: DepositVector, newPosition: DepositVector, boundary: DepositBoundary = 'closed'): number {
+  validateGrid(grid, [Ex, Ey, Ez], boundary);
+  const arrays = [Ex, Ey, Ez];
+  let sum = 0, compensation = 0;
+  walkTrajectory(grid, oldPosition, newPosition, boundary, (axis, index, length) => {
+    if (length === 0) return;
+    const field = arrays[axis][index];
+    if (!Number.isFinite(field)) throw new Error('Contributing electric trajectory field must be finite');
+    const value = field * length - compensation, next = sum + value;
+    compensation = (next - sum) - value; sum = next;
+  });
+  if (!Number.isFinite(sum)) throw new Error('Electric trajectory integral exceeds finite numerical range');
+  return sum;
 }
