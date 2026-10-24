@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { makeCharge, makeScene, makeLoop } from '../src/scene/defaults';
+import { makeCharge, makeScene, makeLoop, makeDielectric } from '../src/scene/defaults';
 import { useAppStore } from '../src/app/store';
 import { SimulationController } from '../src/app/controller';
 
@@ -41,4 +41,15 @@ it('reports unsupported passive material in approximation mode without using imp
   expect(useAppStore.getState().status.message).toMatch(/passive|Maxwell/i);
   expect(workers).toHaveLength(0);
   controller.dispose();
+});
+
+it('rejects Drude material in approximation mode rather than silently using epsilon infinity', () => {
+  const material = Object.assign(makeDielectric(), { materialModel: 'drude', drude: { omegaP: 1e9, gamma: 1e8 } });
+  const scene = makeScene({ name: 'dispersive', objects: [material] });
+  const workers: unknown[] = [];
+  vi.stubGlobal('Worker', class { constructor() { workers.push(this); } postMessage() {} terminate() {} });
+  const controller = new SimulationController(); controller.update(scene, false);
+  expect(useAppStore.getState().status.phase).toBe('error');
+  expect(useAppStore.getState().status.message).toMatch(/Drude|dispers/i);
+  expect(workers).toHaveLength(0); controller.dispose();
 });

@@ -76,6 +76,9 @@ export interface ConductorObject extends SceneObjectBase {
 
 export interface DielectricObject extends SceneObjectBase {
   kind: 'dielectric';
+  /** Missing selects the legacy nondispersive linear material. */
+  materialModel?: 'linear' | 'drude';
+  drude?: { omegaP: number; gamma: number }; // plasma angular frequency (rad/s), damping (s^-1)
   shape: ShapeKind;
   size: Vec3;
   epsilonR: number;

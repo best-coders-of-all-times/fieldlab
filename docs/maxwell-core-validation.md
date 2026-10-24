@@ -88,3 +88,9 @@ This selected oblique packet reaches `1e-3` and improves with thickness. It is n
 The accompanying core tests separately check compatible Gauss constraints, conserved impressed-current charge evolution, nonuniform material conduction, vacuum/material wave speed and impedance, second-order smooth-wave convergence, material CFL validation, deterministic replay including CPML histories, static background preservation, and off-center electrostatic preparation.
 
 Native Meep comparisons are documented separately in [the Meep validation report](maxwell-meep-validation.md). No WebGPU comparison, moving dielectric/PEC benchmark, arbitrary rigid-body momentum balance, skin response of a moving conductor, or universal browser-performance claim is included here. These CPU benchmarks validate the stated stationary kernel problems and selected absorbing-boundary pulses; the implementation plan's remaining milestones retain their own acceptance requirements.
+
+## Finite-volume field energy balance
+
+`fieldBalance.ts` checks the discrete Poynting theorem over one update in a box inside the ordinary Yee region. The balance includes outward boundary flux and work by **all** current used in Ampere, including deposited, implicit Ohmic and Drude current. Tests require relative closure below 1e-12 for a nonuniform driven/Ohmic/Drude field and below 1e-10 for the moving-capacitor scene.
+
+The exact discrete field energy uses E at integer time and the product B_(n-1/2) dot B_(n+1/2), rather than claiming that the displayed centered physical-energy estimate is an exact invariant. Flux uses the corresponding discrete boundary product. CPML cells/PEC closure are excluded from the control volume. This optional validation copies E and is not imposed on every rendered frame. It treats carrier/body current work as transfer out of the field; it does not establish a closed mechanical/source/support energy or momentum budget.

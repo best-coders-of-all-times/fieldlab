@@ -35,7 +35,7 @@ With approximation retained, `fdtd/fdtd3d.ts` advances Yee-style Faraday and Amp
 
 Field steps, source trajectories, source particles and runtime body poses share physical dt. The dedicated browser worker returns step, time, generation, probes, transforms and diagnostics. Rendering consumes accepted frames rather than driving a second wall-clock Maxwell motion oscillator. Restart invalidates old generations, including replies already in flight.
 
-The core supports stationary linear isotropic nondispersive materials, conductivity, PEC closure and CPML with CFL/material validation. The scene adapter currently accepts PEC/CPML and rejects periodic scenes pending initialization/transport validation. Core/native-reference periodic tests do not enable arbitrary periodic source scenes.
+The core supports stationary linear isotropic background materials, conductivity, an optional stationary Drude carrier pole, PEC closure and CPML with CFL/material validation. The scene adapter currently accepts PEC/CPML and rejects periodic scenes pending initialization/transport validation. Core/native-reference periodic tests do not enable arbitrary periodic source scenes.
 
 Initialization prepares electrostatic E/charge with finite-domain boundary/electrode conditions. External B is the initial uniform B. Impressed currents start at t = 0 and generate a transient. Static initial E with suddenly assigned velocity and no compatible magnetic/source history is not an established uniformly moving solution. Capturing a prepared static background for CPML does not establish an exact isolated DC boundary for every configuration.
 
@@ -48,9 +48,15 @@ Initialization prepares electrostatic E/charge with finite-domain boundary/elect
 | Wire/loop/coil | Stationary impressed current, or explicitly selected resolved passive conducting material | Passive wires share the finite-conductivity body model. Diameter must span three cells; no automatic enlargement or separate-body electrical contact. Impressed filaments cannot move. |
 | Electric point source / antenna | Current deposition; amplitude in amperes | Magnetic point-current components and moving driven sources are rejected; no general calibrated port. |
 | Plane-wave gadget | Fixed x-normal current sheet; amplitude specifies an E scale; radiates both ways | Authored +x sheet orientation only, not a one-way TFSF source. |
-| Stationary dielectric | Staircased linear epsilon_r, mu_r and conductivity | No dispersion, hysteresis or general moving constitutive response; moving dielectrics are rejected. |
+| Stationary dielectric | Staircased background epsilon_r, mu_r and conductivity; optional Drude carrier response | One local Drude pole with specified SI parameters; no hysteresis or general moving constitutive response. |
 | Conductor | Initialized isolated charge, finite conductivity and transported body-owned charge | Not a moving PEC, voltage supply or validated arbitrary moving interface. |
 | Permanent magnet | Prescribed laboratory-shape impressed polarization/magnetization, including motion | No force-driven magnet, rest-shape contraction, hysteresis or internal magnetic relaxation. |
+
+### Stationary Drude material
+
+Selecting Drude adds free-carrier current satisfying dJ_D/dt + gamma J_D = epsilon_0 omega_p^2 E. Plasma angular frequency omega_p uses rad/s; damping gamma uses s^-1. The positive permittivity control remains the high-frequency background, not a constant negative permittivity. Carrier current starts at rest, evolves with the field step, contributes to charge continuity, and is restored on rewind. Its coupled wave/plasma timestep is checked explicitly. Moving dispersive matter is rejected. Approximation mode reports this model as unsupported; switching to Linear preserves saved pole parameters.
+
+The reported carrier kinetic and damping energies are time-staggered numerical estimates, not a closed energy ledger. Total energy includes the carrier estimate when enabled; E/B probe energy densities retain their background-field meanings. See `maxwell-drude-validation.md` for measured frequency, reflection and penetration results.
 
 ### Open initial fields
 
@@ -86,7 +92,7 @@ Charged spheres and finite-conductivity bodies use experimental classical rigid-
 
 ## Probes, resolution and physical time
 
-Full-mode probes return E/B and available D/H/J and deposited nodal charge density in SI. J includes the deposited contributions used by the field update. In impressed-magnet configurations rho includes bound polarization charge, so it is not exclusively free charge. B is synchronized to the electric sample time; each component is interpolated from its Yee location. Recentring/interpolation remain numerical approximations, especially at interfaces.
+Full-mode probes return E/B and available D/H/J and deposited nodal charge density in SI. J includes the deposited, implicit Ohmic and Drude current used by the last Ampere update at t - dt/2; E/B/D/H are synchronized at t. At initial preparation there is no preceding current update. Drude carriers contribute to free charge; impressed magnet polarization also contributes bound charge to the deposited rho readout. In impressed-magnet configurations rho includes bound polarization charge, so it is not exclusively free charge. B is synchronized to the electric sample time; each component is interpolated from its Yee location. Recentring/interpolation remain numerical approximations, especially at interfaces.
 
 A unique electrostatic phi cannot describe full evolving E; full-mode potential is not displayed as a computed zero. Poynting uses `E × H`. Linear-background field energies do not include magnet internal energy or complete mechanical/feed work.
 

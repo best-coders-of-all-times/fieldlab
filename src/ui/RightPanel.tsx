@@ -226,8 +226,22 @@ function ObjectPhysics({
     );
   }
   if (isDielectric(obj)) {
+    const drude = obj.materialModel === 'drude';
+    const parameters = obj.drude ?? { omegaP: 1e9, gamma: 1e8 };
     return (
       <PanelSection title="Dielectric">
+        {(fullMaxwell || drude) && <Field label="Material model">
+          <Select value={obj.materialModel ?? 'linear'} options={[
+            { value: 'linear', label: 'Linear (nondispersive)' },
+            { value: 'drude', label: 'Drude (dispersive)' },
+          ]} onChange={materialModel => patch({ materialModel, ...(materialModel === 'drude' ? { drude: parameters } : {}) })} />
+        </Field>}
+        {drude && <>
+          <Field label="Plasma angular frequency"><NumberInput value={parameters.omegaP} min={0} step={1e8} unit="rad/s" onChange={omegaP => patch({ drude: { ...parameters, omegaP } })} /></Field>
+          <Field label="Damping rate"><NumberInput value={parameters.gamma} min={0} step={1e7} unit="s⁻¹" onChange={gamma => patch({ drude: { ...parameters, gamma } })} /></Field>
+          {!fullMaxwell && <div className="note warn" role="alert">Drude dispersion requires Maxwell mode. Disable Use approximation in Solve or choose the linear material model.</div>}
+          <div className="note">Stationary Drude material adds a dispersive current to the linear background. Plasma angular frequency is in rad/s; damping is in s⁻¹. Initial example values are a demonstration, not fitted parameters for a real metal. Parameters remain saved when switching to Linear.</div>
+        </>}
         <Field label="Shape">
           <Select
             value={obj.shape}
@@ -248,7 +262,7 @@ function ObjectPhysics({
         <Field label="Relative permeability μᵣ">
           <Slider value={obj.muR} min={0.5} max={10} step={0.1} format={(v) => v.toFixed(2)} onChange={(v) => patch({ muR: v })} />
         </Field>
-        <div className="note">{fullMaxwell ? 'Stationary nondispersive material. Moving dielectric response requires a supported constitutive model; unsupported motion is rejected.' : 'Permeability and conductivity affect wave scenes. Static B uses the vacuum Biot–Savart model; static dielectrics use permittivity.'}</div>
+        <div className="note">{fullMaxwell ? `${drude ? 'Permittivity sets the nondispersive background of the stationary Drude response.' : 'Stationary nondispersive material.'} Moving dielectric response requires a supported constitutive model; unsupported motion is rejected.` : 'Permeability and conductivity affect wave scenes. Static B uses the vacuum Biot–Savart model; static dielectrics use permittivity.'}</div>
         <Field label="Conductivity σ">
           <NumberInput value={obj.sigma} step={0.01} unit="S/m" onChange={(v) => patch({ sigma: Math.max(0, v) })} />
         </Field>
@@ -840,9 +854,10 @@ function MeasurePanel() {
           ['steps', 'Physical steps'], ['stepsPerSecond', 'Measured steps / second'],
           ['gaussRelative', 'Relative Gauss residual'], ['divergenceE', 'Absolute electric Gauss residual'],
           ['divergenceB', 'Magnetic divergence residual'], ['charge', 'Total charge (C)'],
-          ['totalEnergy', 'Field energy (J)'], ['ohmicLoss', 'Stationary material loss (J)'],
+          ['totalEnergy', 'Field and carrier energy estimate (J)'], ['ohmicLoss', 'Stationary material loss (J)'],
           ['sourceWork', 'Applied-current work (J)'], ['conductorLoss', 'Body heat estimate (J)'],
           ['mechanicalWork', 'Rigid linear work, partial (J)'],
+          ...(scene.objects.some(o => o.visible && o.kind === 'dielectric' && o.materialModel === 'drude') ? [['drudeKineticEnergy', 'Carrier kinetic estimate (J)'], ['drudeLoss', 'Drude damping estimate (J)']] : []),
         ].map(([key, label]) => <div className="stat-line" key={key}><span>{label}</span><b>{measurements.extra?.[key] !== undefined ? formatSci(measurements.extra[key], 4) : '—'}</b></div>)}
         <div className="note">Relative Gauss residual uses the current charge and D/Δx scales. Applied-current work includes deposited conduction and bound currents as well as impressed sources. Stationary material loss, body heat and partial rigid linear work are separate diagnostics; they are not a closed energy/momentum ledger. Check resolution, domain, boundaries and initialization.</div>
       </PanelSection>}

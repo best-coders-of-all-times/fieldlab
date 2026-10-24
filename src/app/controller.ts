@@ -143,6 +143,12 @@ export class SimulationController {
     useAppStore.getState().setFdtdMeta(null);
     useAppStore.setState({ measurements: {} });
 
+    if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && o.kind === 'dielectric' && o.materialModel === 'drude')) {
+      this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
+      this.fail('Drude dispersion requires Maxwell mode. Disable "Use approximation", or explicitly choose a linear material.');
+      return;
+    }
+
     if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && (o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil') && o.electricalModel === 'conducting')) {
       this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
       this.fail('Passive conducting wires require Maxwell mode. Disable “Use approximation”, or explicitly choose an impressed-current source.');

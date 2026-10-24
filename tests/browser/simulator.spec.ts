@@ -169,7 +169,7 @@ test('Maxwell point charges step on physical time and replay preserves edited so
 });
 
 test('capacitor requires an explicit isolated model and moving bodies share the Maxwell clock', async ({ page }) => {
-  test.setTimeout(90000);
+  test.setTimeout(150000);
   await page.getByRole('button', { name: /Parallel-plate capacitor/ }).click();
   await expect(page.locator('.status-chip.ready')).toBeVisible();
   await page.getByRole('button', { name: 'Pause (space)', exact: true }).click();
@@ -184,8 +184,12 @@ test('capacitor requires an explicit isolated model and moving bodies share the 
   await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
   await expect(page.locator('.status-chip.error')).toBeVisible();
   await expect(page.getByRole('alert').first()).toContainText('Initialize plate voltages');
+  const preparationStarted = Date.now();
   await page.locator('.check-row').filter({ hasText: 'Initialize plate voltages, then isolate' }).getByRole('switch').click();
-  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  // The open-boundary initial solve at 48 cells is substantially slower than
+  // subsequent field steps. Wait for readiness rather than assuming 15 seconds.
+  await expect(page.locator('.status-chip.ready')).toBeVisible({ timeout: 60000 });
+  test.info().annotations.push({ type: 'preparation-ms', description: String(Date.now() - preparationStarted) });
   await page.getByRole('button', { name: 'Single step', exact: true }).click();
   await expect.poll(async () => page.evaluate(() => {
     const frame = (window as any).fieldlabFrames.filter((f: any) => f.diagnostics && f.steps > 0).at(-1);
@@ -299,4 +303,34 @@ test('experimental passive pickup preset runs directly with coherent fields and 
   await expect(page.getByRole('button', { name: '24³', exact: true })).toHaveClass(/active/);
   await expect(page.locator('.status-chip.ready')).toBeVisible();
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('fieldlab.scene.v1')!).simulation.resolution)).toBe(24);
+});
+
+test('Drude selection preserves SI parameters across material switches and reload', async ({ page }) => {
+  test.setTimeout(60000);
+  await page.getByRole('button', { name: /New custom scene/ }).click();
+  await page.getByRole('button', { name: /^Dielectric / }).click();
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
+  await page.getByRole('button', { name: '16³', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  const model = page.getByRole('group', { name: 'Material model', exact: true }).getByRole('combobox');
+  await model.selectOption('drude');
+  const plasma = page.getByRole('group', { name: 'Plasma angular frequency', exact: true }).getByRole('textbox');
+  const damping = page.getByRole('group', { name: 'Damping rate', exact: true }).getByRole('textbox');
+  await expect(plasma).toHaveValue(/^1(?:e9|\u00d710\u2079)$/);
+  await expect(damping).toHaveValue(/^1(?:e8|\u00d710\u2078)$/);
+  await plasma.fill('2e9'); await plasma.press('Enter');
+  await model.selectOption('linear');
+  await expect(plasma).toHaveCount(0);
+  await model.selectOption('drude');
+  await expect(plasma).toHaveValue(/^2(?:e9|\u00d710\u2079)$/);
+  await page.reload();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.locator('.object-row').first().click();
+  await expect(model).toHaveValue('drude');
+  await expect(plasma).toHaveValue(/^2(?:e9|\u00d710\u2079)$/);
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Drude dispersion requires Maxwell mode' }).last()).toBeVisible();
 });

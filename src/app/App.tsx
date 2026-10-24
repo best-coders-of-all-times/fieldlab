@@ -9,9 +9,17 @@ import { ChartDrawer } from '../ui/Chart';
 import { Icon } from '../ui/Icon';
 import { restoreScene } from './restoreScene';
 
+function saveCurrentScene() {
+  const state = useAppStore.getState();
+  if (!state.autosave) return;
+  try { localStorage.setItem('fieldlab.scene.v1', JSON.stringify(state.scene)); }
+  catch { /* Storage can be unavailable in private contexts. */ }
+}
+
 export default function App() {
   const scene = useAppStore((s) => s.scene);
   const playing = useAppStore((s) => s.playing);
+  const autosave = useAppStore((s) => s.autosave);
   const panels = useAppStore((s) => s.panels);
   const selectedId = useAppStore((s) => s.selectedId);
   const error = useAppStore((s) => s.error);
@@ -55,17 +63,23 @@ export default function App() {
 
   useEffect(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      try {
-        localStorage.setItem('fieldlab.scene.v1', JSON.stringify(scene));
-      } catch {
-        // Storage can be unavailable in private contexts.
-      }
-    }, 700);
+    saveTimer.current = setTimeout(saveCurrentScene, 700);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [scene]);
+  }, [scene, autosave]);
+
+  useEffect(() => {
+    // A reload can happen before the debounce expires. Read the store at the
+    // event rather than capturing an earlier render's scene.
+    const onHidden = () => { if (document.visibilityState === 'hidden') saveCurrentScene(); };
+    window.addEventListener('pagehide', saveCurrentScene);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      window.removeEventListener('pagehide', saveCurrentScene);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
+  }, []);
 
   useEffect(() => {
     if (!error) return;

@@ -73,7 +73,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     const pad = (['x', 'y', 'z'] as const).map(a => scene.simulation.boundary[a] === 'pml' ? scene.simulation.pmlCells : 0);
     const dims = physical.map((v, a) => v + 2 * pad[a]);
     // Float64 reference implementation with auxiliary fields and working memory.
-    const bytesPerCell = 1100 + 16 * scene.objects.filter(o => o.visible && isConductingBody(o)).length;
+    const bytesPerCell = 1100 + 144 * Number(scene.objects.some(o => o.visible && isDielectric(o) && o.materialModel === 'drude')) + 16 * scene.objects.filter(o => o.visible && isConductingBody(o)).length;
     if (dims.reduce((n, v) => n * v, 1) * bytesPerCell > 768 * 1024 ** 2) throw new Error('This Maxwell grid exceeds the 768 MiB working-memory budget. Lower resolution or absorbing-layer thickness.');
     const core = new YeeSolver({ nx: dims[0], ny: dims[1], nz: dims[2], dx: ds[0], dy: ds[1], dz: ds[2], cfl: scene.simulation.cfl,
       boundary: scene.simulation.boundary, pmlCells: Math.max(...pad) });
@@ -152,7 +152,9 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     let epsilon = 1, mu = 1;
     for (const values of [s.epsX, s.epsY, s.epsZ]) for (const value of values) epsilon = Math.min(epsilon, value);
     for (const values of [s.muX, s.muY, s.muZ]) for (const value of values) mu = Math.min(mu, value);
-    const courant2 = (C_LIGHT * s.dt) ** 2 * (1 / s.dx ** 2 + 1 / s.dy ** 2 + 1 / s.dz ** 2) / (epsilon * mu);
+    let plasma = 0;
+    if (s.drude) for (const [omega, eps] of [[s.drude.omegaPX, s.epsX], [s.drude.omegaPY, s.epsY], [s.drude.omegaPZ, s.epsZ]]) for (let c = 0; c < omega.length; c++) plasma = Math.max(plasma, omega[c] ** 2 / eps[c]);
+    const courant2 = s.dt ** 2 * plasma / 4 + (C_LIGHT * s.dt) ** 2 * (1 / s.dx ** 2 + 1 / s.dy ** 2 + 1 / s.dz ** 2) / (epsilon * mu);
     // For the explicit-current Yee recurrence at the highest grid frequency,
     // sigma*dt/epsilon <= 2*(1-Courant^2). Reserve a 10% margin. Checking the
     // damping and vacuum CFL independently misses this coupled restriction.
@@ -262,14 +264,22 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   private assignMaterials() {
     const s = this.core, eps = [s.epsX, s.epsY, s.epsZ], mus = [s.muX, s.muY, s.muZ], sig = [s.sigmaX, s.sigmaY, s.sigmaZ];
     const dielectrics = this.scene.objects.filter(o => o.visible && isDielectric(o));
+    const hasDrude = dielectrics.some(o => isDielectric(o) && o.materialModel === 'drude');
+    const omega = hasDrude ? [new Float64Array(s.rho.length), new Float64Array(s.rho.length), new Float64Array(s.rho.length)] : undefined;
+    const gamma = hasDrude ? [new Float64Array(s.rho.length), new Float64Array(s.rho.length), new Float64Array(s.rho.length)] : undefined;
+    for (const o of dielectrics) if (isDielectric(o) && o.materialModel === 'drude' && (!o.drude || !Number.isFinite(o.drude.omegaP) || o.drude.omegaP < 0 || !Number.isFinite(o.drude.gamma) || o.drude.gamma < 0)) throw new Error(`${o.name}: Drude plasma angular frequency and damping must be finite and nonnegative.`);
     for (let k = 0; k < s.nz; k++) for (let j = 0; j < s.ny; j++) for (let i = 0; i < s.nx; i++) {
       const c = i + s.nx * (j + s.ny * k);
       for (let a = 0; a < 3; a++) for (const object of dielectrics) if (isDielectric(object)) {
-        if (shapeContains(object, this.point(i, j, k, OFF[a]))) { eps[a][c] = object.epsilonR; sig[a][c] = object.sigma; }
+        if (shapeContains(object, this.point(i, j, k, OFF[a]))) {
+          eps[a][c] = object.epsilonR; sig[a][c] = object.sigma;
+          if (omega && gamma) { omega[a][c] = object.materialModel === 'drude' ? object.drude!.omegaP : 0; gamma[a][c] = object.materialModel === 'drude' ? object.drude!.gamma : 0; }
+        }
         const off: Vec3 = [0.5, 0.5, 0.5]; off[a] = 0;
         if (shapeContains(object, this.point(i, j, k, off))) mus[a][c] = object.muR;
       }
     }
+    if (omega && gamma) s.configureDrude({ omegaP: { x: omega[0], y: omega[1], z: omega[2] }, gamma: { x: gamma[0], y: gamma[1], z: gamma[2] } });
   }
 
   private initializeElectrodes() {
@@ -579,7 +589,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     // near-zero initial rho alone amplifies roundoff into a false alarm.
     const gaussScale = Math.max(this.chargeScale, Math.sqrt(scale2 / Math.max(count, 1)));
     return { ...d, gaussRelative: d.divergenceE / gaussScale, gaussScale, preparationResidual: this.preparationResidual, openBoundaryResidual: this.openBoundaryResidual, openBoundaryIterations: this.openBoundaryIterations,
-      mechanicalWork: this.mechanicalWork, conductorLoss: this.conductorLoss, estimatedBytes: this.core.rho.length * (1100 + 16 * this.bodyCharge.size),
+      mechanicalWork: this.mechanicalWork, conductorLoss: this.conductorLoss, estimatedBytes: this.core.rho.length * (1100 + (this.core.drude ? 144 : 0) + 16 * this.bodyCharge.size),
       stepsPerSecond: this.elapsedMs > 0 ? 1000 * this.steps / this.elapsedMs : 0 };
   }
   energy() { const d = this.core.diagnostics(); return { electric: d.electricEnergy, magnetic: d.magneticEnergy }; }

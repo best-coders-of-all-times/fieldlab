@@ -67,11 +67,11 @@ export class MaxwellSampler {
 
   sample(p: Vec3): FdtdSample & { D: Vec3; J: Vec3; rho: number; energyE: number; energyB: number } {
     const s = this.core, es = [s.Ex, s.Ey, s.Ez], eps = [s.epsX, s.epsY, s.epsZ];
-    const mus = [s.muX, s.muY, s.muZ], js = [s.Jx, s.Jy, s.Jz];
+    const mus = [s.muX, s.muY, s.muZ];
     const { E, B } = this.sampleEB(p);
     const D = es.map((e, a) => this.interpolate(p, E_OFF[a], c => EPS0 * eps[a][c] * e[c])) as Vec3;
     const H = B_OFF.map((off, a) => this.interpolate(p, off, c => this.synchronizedB(a, c) / (MU0 * mus[a][c]))) as Vec3;
-    const J = js.map((j, a) => this.interpolate(p, E_OFF[a], c => j[c])) as Vec3;
+    const J = E_OFF.map((off, a) => this.interpolate(p, off, c => s.currentAtUpdate(a as 0 | 1 | 2, c))) as Vec3;
     return { E, D, B, H, J, rho: this.interpolate(p, [0, 0, 0], c => s.rho[c]),
       energyE: 0.5 * E.reduce((sum, e, a) => sum + e * D[a], 0),
       energyB: 0.5 * B.reduce((sum, b, a) => sum + b * H[a], 0),

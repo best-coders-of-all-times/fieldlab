@@ -1,12 +1,26 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { restoreScene } from '../src/app/restoreScene';
 import { useAppStore } from '../src/app/store';
-import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil } from '../src/scene/defaults';
+import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil, makeDielectric } from '../src/scene/defaults';
 
 const initial = useAppStore.getState();
 afterEach(() => useAppStore.setState(initial, true));
 
 describe('simulation model migration', () => {
+  it('keeps legacy dielectrics linear and round trips retained Drude parameters after switching to linear', () => {
+    const legacy = makeScene({ name: 'legacy', objects: [makeDielectric()] });
+    const restoredLegacy = restoreScene(JSON.parse(JSON.stringify(legacy)), makeScene({ name: 'base' }))!;
+    expect(restoredLegacy.objects[0]).not.toHaveProperty('materialModel');
+    expect(restoredLegacy.objects[0]).not.toHaveProperty('drude');
+    const material = makeDielectric();
+    material.materialModel = 'drude'; material.drude = { omegaP: 2e9, gamma: 3e8 };
+    const scene = makeScene({ name: 'dispersion', objects: [material] });
+    scene.simulation.useApproximation = false;
+    useAppStore.setState({ scene });
+    useAppStore.getState().updateObject(material.id, { materialModel: 'linear' });
+    const restored = restoreScene(JSON.parse(JSON.stringify(useAppStore.getState().scene)), legacy)!;
+    expect(restored.objects[0]).toMatchObject({ materialModel: 'linear', drude: { omegaP: 2e9, gamma: 3e8 } });
+  });
   it.each([makeWire(), makeLoop(), makeCoil()])('starts a new $kind as an impressed source and preserves an explicit passive model on save', object => {
     expect(object.electricalModel).toBe('impressed');
     expect(object.conductivity).toBe(0.01);

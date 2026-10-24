@@ -139,6 +139,7 @@ async function main() {
     const sourceSha256 = Object.fromEntries(await Promise.all([
       'scripts/benchmark-maxwell.mjs', 'src/engine/maxwell/sceneSolver.ts', 'src/engine/maxwell/yee.ts',
       'src/engine/maxwell/sampling.ts', 'src/engine/maxwell/cpml.ts', 'src/engine/maxwell/initialization.ts',
+      'src/engine/maxwell/openInitialization.ts', 'src/engine/maxwell/coulombBoundary.ts', 'src/engine/maxwell/boundaryKrylov.ts',
       'src/engine/maxwell/deposition.ts', 'src/engine/maxwell/dynamics.ts', 'src/engine/maxwell/rigid.ts', 'src/engine/maxwell/conductingFilament.ts', 'src/engine/maxwell/magnetization.ts', 'src/engine/maxwell/materials.ts', 'src/workers/fdtd.worker.ts',
     ].map(async path => [path, createHash('sha256').update(await readFile(resolve(projectRoot, path))).digest('hex')])));
     const report = { generatedAt: new Date().toISOString(), commandArguments: process.argv.slice(2), sourceSha256,

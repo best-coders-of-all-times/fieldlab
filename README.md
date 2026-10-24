@@ -66,6 +66,7 @@ npm run bench:maxwell -- --json artifacts/maxwell-benchmark.json --report docs/m
 - [Numerical core validation](docs/maxwell-core-validation.md): specified Fresnel amplitudes, stationary cavity frequency, finite-conductivity attenuation/loss and selected normal/oblique CPML pulses, with refinement and exclusions.
 - [Native Meep comparison](docs/maxwell-meep-validation.md): actual Meep 1.35.0 source-free periodic standing waves in vacuum and relative permittivity 4. Maximum selected CPU/Meep RMS difference is `2.51e-16`; continuum error is reported separately and converges at second order. This does not validate moving bodies, charge sources or CPML.
 - [Physics model and evidence](docs/physics-model.md): source initialization, moving-charge refinement, observable meanings and force/material limitations.
+- [Stationary Drude validation](docs/maxwell-drude-validation.md): angular-frequency material parameters, coupled stability and measured dispersion/penetration.
 - [Full implementation plan](docs/superpowers/plans/2026-10-24-full-maxwell-fdtd.md): outstanding moving-PEC/mirror, general moving-media, explicit-feed/passive-circuit, complete energy/momentum and WebGPU parity acceptance requirements.
 
 Browser tests exercise actual worker frames, edited-scene replay, probes, conductor setup and common physical time. They use Edge on Windows; install Playwright Chromium elsewhere. Screenshots go to `artifacts/`. Passing tests and selected references do not provide a universal accuracy guarantee.
