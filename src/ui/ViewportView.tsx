@@ -34,6 +34,7 @@ export function ViewportView() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<ViewportController | null>(null);
   const scene = useAppStore((s) => s.scene);
+  const fullMaxwell = scene.simulation.useApproximation === false;
   const selectedId = useAppStore((s) => s.selectedId);
   const cameraRequest = useAppStore((s) => s.cameraRequest);
   const cameraMode = useAppStore((s) => s.cameraMode);
@@ -93,7 +94,7 @@ export function ViewportView() {
     <div className="viewport" ref={wrapRef}>
       <div className="viewport-overlay">
         <div className="vp-top-left">
-          <span className="vp-chip"><span className="dot" /><b>{scene.mode === 'fields' ? 'Fields' : 'Waves'}</b> · {scene.mode === 'fields' ? 'static / quasistatic' : 'time-domain Maxwell'}</span>
+          <span className="vp-chip"><span className="dot" /><b>{fullMaxwell ? 'Maxwell FDTD' : scene.mode === 'fields' ? 'Fields' : 'Waves'}</b> · {fullMaxwell || scene.mode === 'waves' ? 'time-domain Maxwell' : 'static / quasistatic'}</span>
           {hasSlice && <span className="vp-chip">{QUANTITY_LABEL[q]} slice · {QUANTITY_UNIT[q]}</span>}
           {inductionTelemetry.length > 0 && (
             <span className="vp-chip">
@@ -103,7 +104,7 @@ export function ViewportView() {
           {particleTelemetry.length > 0 && (
             <span className="vp-chip">v <b>{formatPrefixed(particleTelemetry[0].speed, 'm/s')}</b></span>
           )}
-          {scene.mode === 'waves' && (
+          {(scene.mode === 'waves' || fullMaxwell) && (
             <span className={`vp-chip ${play ? '' : 'warn'}`}><span className="dot" />{play ? 'running' : 'paused'} · {formatSci(time, 3)} s</span>
           )}
           <span className="vp-chip">{scene.objects.length} objects</span>

@@ -480,7 +480,8 @@ function DisplayPanel() {
   const scene = useAppStore((s) => s.scene);
   const setDisplay = useAppStore((s) => s.setDisplay);
   const d = scene.display;
-  const waves = scene.mode === 'waves' || scene.simulation.useApproximation === false;
+  const fullMaxwell = scene.simulation.useApproximation === false;
+  const waves = scene.mode === 'waves' || fullMaxwell;
   const quantities: Array<{ value: SliceQuantity; label: string }> = waves
     ? [
         { value: 'Emag', label: '|E|' },
@@ -509,10 +510,10 @@ function DisplayPanel() {
               { value: 'B', label: 'Magnetic field lines' },
             ]}
             onChange={(fieldLines) => setDisplay({ fieldLines })}
-            disabled={waves}
+            disabled={waves && !fullMaxwell}
           />
         </Field>
-        {!waves && (
+        {(!waves || fullMaxwell) && (
           <Field label="Lines / seeds">
             <Slider value={d.lineCount} min={8} max={140} step={4} format={(v) => `${Math.round(v)}`} onChange={(lineCount) => setDisplay({ lineCount })} />
           </Field>

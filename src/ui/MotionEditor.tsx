@@ -11,7 +11,7 @@ export function MotionEditor({ obj, patch }: { obj: SceneObject; patch: (p: Part
     inertia: [1, 1, 1] as [number, number, number],
     velocity: obj.kind === 'particle' ? obj.velocity : [0, 0, 0] as [number, number, number],
     angularVelocity: [0, 0, 0] as [number, number, number] };
-  const forceModel = obj.kind === 'particle' || obj.kind === 'conductor';
+  const forceModel = ['charge', 'chargedSphere', 'particle', 'conductor'].includes(obj.kind);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
