@@ -112,3 +112,22 @@ it('rebuilds Maxwell particle physics for source profile and width edits while p
   expect(workers[2].messages.at(-2).type).toBe('config');
   controller.dispose();
 });
+
+it('invalidates old worker replies and rebuilds particle physics after feedback edits', () => {
+  vi.useFakeTimers();
+  const workers: any[] = [];
+  vi.stubGlobal('Worker', class { messages: any[] = []; onmessage: any; constructor() { workers.push(this); } postMessage(m: unknown) { this.messages.push(m); } terminate() {} });
+  const particle = makeParticle(), scene = makeScene({ name: 'feedback edits', objects: [particle] });
+  scene.simulation.useApproximation = false;
+  const controller = new SimulationController(); controller.update(scene, false);
+  const old = workers[0], generation = old.messages[0].generation;
+  controller.update({ ...scene, objects: [{ ...particle, fieldFeedback: 'testParticle' } as typeof particle] }, false);
+  expect(old.messages.at(-1).type).toBe('pause');
+  useAppStore.getState().setTime(0);
+  old.onmessage({ data: { type: 'frame', generation, time: 10, steps: 10, meta: { dt: 1, dx: 0.1, frequency: 0 }, energy: { electric: 0, magnetic: 0 }, probes: [] } });
+  expect(useAppStore.getState().time).toBe(0);
+  vi.advanceTimersByTime(170);
+  expect(workers).toHaveLength(2);
+  expect(workers[1].messages[0].scene.objects[0].fieldFeedback).toBe('testParticle');
+  controller.dispose();
+});

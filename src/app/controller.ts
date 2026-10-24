@@ -28,7 +28,7 @@ function physicsKey(scene: Scene): string {
       .map((o) => isParticle(o)
         // Trail length is purely visual; changing it should not restart the orbit.
         ? { kind: o.kind, id: o.id, position: o.position, velocity: o.velocity,
-            charge: o.charge, mass: o.mass, sourceProfile: o.sourceProfile, sourceWidth: o.sourceWidth,
+            charge: o.charge, mass: o.mass, fieldFeedback: o.fieldFeedback, sourceProfile: o.sourceProfile, sourceWidth: o.sourceWidth,
             visible: o.visible, motion: o.motion, dynamics: o.dynamics }
         : { ...o, visible: o.visible }),
     resolution: scene.simulation.resolution,

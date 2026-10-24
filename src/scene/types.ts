@@ -145,6 +145,11 @@ export type ParticleSpecies = 'electron' | 'proton' | 'custom';
 
 export interface ParticleObject extends SceneObjectBase, ChargeSourceProfile {
   kind: 'particle';
+  /** Full Maxwell mode: missing preserves a source particle. Test particles
+   * follow local evolved fields without depositing charge or current.
+   * Approximation always retains its existing test-particle behavior.
+   */
+  fieldFeedback?: 'source' | 'testParticle';
   species: ParticleSpecies;
   charge: number; // C
   mass: number; // kg

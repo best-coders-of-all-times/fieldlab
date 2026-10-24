@@ -1,0 +1,10 @@
+# Explicit test particles on the Maxwell clock
+
+Continuation of approved M6: couple source particles to evolved fields with conserved deposition, while retaining a labelled test-particle option. The approximation path already has test particles; the full solver currently always sources particle charge/current. This addition makes the feedback choice explicit without changing defaults.
+
+Ruling: add ParticleObject.fieldFeedback?: 'source' | 'testParticle'. Undefined preserves the existing full-mode source particle. The full-mode test particle follows local evolved E/B on the same physical clock but deposits no rho/J and has no field feedback. Label this intentional neglect of feedback; do not count its kinetic change as closed source-particle energy or silently mix it into the source-work mismatch. Approximation remains its existing test-particle model regardless of the retained setting.
+
+1. Tests first: full-mode test particle accelerates in uniform evolved E while its rho/J/fields exactly match a no-particle baseline; nonuniform evolved fields are gathered locally; source particles still deposit by default; replay and bounds retain behavior. Old files and dormant source-profile/width settings survive switches/save. Invalid feedback modes fail clearly.
+2. Scene compiler excludes test particles from charge initialization and current deposition, uses local probe E/B for their momentum kicks, and skips them in source-only kinetic/work residuals. Source profile/width are inactive and must not require finite-cloud support for test mode. Actual particle point remains inside the physical domain.
+3. Inspector exposes Source particle / Test particle, no feedback only for full mode, with clear meaning. Preserve inactive choices. Controller physics key must include fieldFeedback so edits invalidate stale workers. Approximation explains its own behavior.
+4. Real browser workflow verifies saved feedback choice, worker generation rebuild, profile inactivity and rewind/replay. Run relevant unit/build/browser checks, review, Git checkpoint. This is an explicit comparison model, not general M6 energy/momentum acceptance.

@@ -1,6 +1,6 @@
 # Full Maxwell FDTD engine, motion, and replay
 
-**Status:** Implementation plan only. No solver or UI implementation is included in this change.
+**Status:** Implementation in progress on `feature/maxwell-engine`. See `2026-10-24-maxwell-progress.md` for completed increments, measured validation and remaining acceptance gaps. The repository findings below describe the pre-implementation baseline.
 
 **Goal:** Replace the separate static, wave, particle, and induction field paths with one time-dependent Maxwell solver for the supported scene models. Provide both prescribed and force-driven motion, and rewind to zero without losing edits.
 
@@ -149,14 +149,16 @@ Update `src/app/controller.ts`, `store.ts`, `App.tsx`, `src/scene/types.ts`, `de
 
 ## 7. Implementation milestones
 
+Checked tasks identify completed implementation/comparison work for the stated models and fixtures. Each milestone acceptance rule remains separate; partial or failed targets and unsupported models stay recorded in `2026-10-24-maxwell-progress.md`. Full release still requires every stated gate below.
+
 ### M1 — Replay and run-state contract
 
 **Files:** Store/controller/protocol/TopBar/App plus `tests/replay.test.ts` and browser transport tests.
 
-- [ ] Reproduce edited-preset data loss and stale in-flight replies after restart.
-- [ ] Introduce independent rewind/replay/restore actions, generation invalidation, and authored/runtime state separation.
-- [ ] Restore every auxiliary state and initial pose, including paused nonzero-phase trajectories.
-- [ ] Verify edited capacitor parameters, wire control points, prescribed/force-driven initial data, display and selection survive rewind and replay. Verify restore remains a distinct action.
+- [x] Reproduce edited-preset data loss and stale in-flight replies after restart.
+- [x] Introduce independent rewind/replay/restore actions, generation invalidation, and authored/runtime state separation.
+- [x] Restore every auxiliary state and initial pose, including paused nonzero-phase trajectories.
+- [x] Verify edited capacitor parameters, wire control points, prescribed/force-driven initial data, display and selection survive rewind and replay. Verify restore remains a distinct action.
 
 **Acceptance:** Replay of a current edited scene reproduces probe samples at fixed steps without undoing edits; old worker frames cannot overwrite the restarted run.
 
@@ -164,10 +166,10 @@ Update `src/app/controller.ts`, `store.ts`, `App.tsx`, `src/scene/types.ts`, `de
 
 **Files:** `yee.ts`, `operators.ts`, `state.ts`, `solver.ts`, `backends/cpu.ts`, `sampling.ts`; `tests/maxwell/operators.test.ts`, `vacuum.test.ts`, `sampling.test.ts`.
 
-- [ ] Write failing div(curl), plane-wave phase/impedance, field synchronization, and source-free energy tests.
-- [ ] Implement compatible D/B leapfrog updates and component-aligned material-free sampling, first reduced-dimensional tests and then 3D.
-- [ ] Establish grid/time refinement tests and Float64/Float32 comparisons.
-- [ ] Add CFL validation and reject unstable settings before allocation/run.
+- [x] Write failing div(curl), plane-wave phase/impedance, field synchronization, and source-free energy tests.
+- [x] Implement compatible D/B leapfrog updates and component-aligned material-free sampling, first reduced-dimensional tests and then 3D.
+- [x] Establish grid/time refinement tests and Float64/Float32 comparisons.
+- [x] Add CFL validation and reject unstable settings before allocation/run.
 
 **Acceptance:** Both E and B propagate together; vacuum wave speed and impedance converge toward analytic values. Smooth source-free cases approach second-order convergence. Constraint errors remain at the established roundoff scale rather than growing with time.
 
@@ -175,9 +177,9 @@ Update `src/app/controller.ts`, `store.ts`, `App.tsx`, `src/scene/types.ts`, `de
 
 **Files:** `materials.ts`, `cpml.ts`, `diagnostics.ts`; `tools/reference/meep/`, `tests/fixtures/maxwell/`, `tests/maxwell/materials.test.ts`, `boundaries.test.ts`.
 
-- [ ] Implement stationary nondispersive materials, finite conductivity, stationary PEC, and CPML; add Drude memory with its stability restrictions.
-- [ ] Compare Fresnel reflection/transmission, cavity resonances, conductor skin depth and loss against analytic results.
-- [ ] Create native Meep scripts and versioned fixtures for overlapping models; match units, geometry, sources, boundaries, sampling positions and times.
+- [x] Implement stationary nondispersive materials, finite conductivity, stationary PEC, and CPML; add Drude memory with its stability restrictions.
+- [x] Compare Fresnel reflection/transmission, cavity resonances, conductor skin depth and loss against analytic results.
+- [x] Create native Meep scripts and versioned fixtures for overlapping models; match units, geometry, sources, boundaries, sampling positions and times.
 - [ ] Measure PML reflection for normal and oblique pulses across the declared test band, with layer-thickness and domain-size refinement.
 
 **Acceptance:** Quantitative interface/cavity agreement and improving convergence; proposed initial target <1% error for well-resolved smooth benchmarks and <1e-3 reflected field amplitude for the defined PML pulse suite. These are acceptance targets, not current measurements or promises for every frequency/geometry.
@@ -186,11 +188,11 @@ Update `src/app/controller.ts`, `store.ts`, `App.tsx`, `src/scene/types.ts`, `de
 
 **Files:** `deposition.ts`, `sources.ts`, `initialization.ts`; scene schema/migration/inspector; `tests/maxwell/deposition.test.ts`, `sources.test.ts`, `capacitor.test.ts`.
 
-- [ ] Test conservation for diagonal/multi-cell paths, periodic crossings, conductor terminals, and boundary exit.
+- [x] Test conservation for diagonal/multi-cell paths, periodic crossings, conductor terminals, and boundary exit.
 - [ ] Implement conserved finite charge shapes and scene-source compilation, including current endpoint charges, polarization/magnetization sources and specified feeds.
 - [ ] Initialize charged scenes consistently; reject net charge in a fully periodic box unless an explicit compatible neutralization model is chosen.
-- [ ] Build isolated-charge and fed charging-capacitor examples. Feed plus return path must be visible and persisted.
-- [ ] Validate Ampere–Maxwell circulation using conduction plus displacement current, and Faraday circulation using evolving B.
+- [x] Build isolated-charge and fed charging-capacitor examples. Feed plus return path must be visible and persisted.
+- [x] Validate Ampere–Maxwell circulation using conduction plus displacement current, and Faraday circulation using evolving B.
 
 **Acceptance:** A stationary charging capacitor generates the appropriate B from the evolved equations; integrated charge budgets and Gauss residuals stay bounded. Source amplitude does not change physical meaning when dt/resolution changes. No independent Biot–Savart overlay supplies the answer.
 
@@ -211,8 +213,8 @@ Update `src/app/controller.ts`, `store.ts`, `App.tsx`, `src/scene/types.ts`, `de
 
 **Files:** `forces.ts`, `dynamics.ts`, source coupling, schema/inspector; `tests/maxwell/dynamics.test.ts`, `momentum.test.ts`, `induction.test.ts`.
 
-- [ ] Add the per-object motion-mode selector, mass/inertia/initial velocities, and explicit fixed constraints.
-- [ ] Couple source particles to evolved fields with conserved deposition; retain a labelled test-particle option.
+- [x] Add the per-object motion-mode selector, mass/inertia/initial velocities, and explicit fixed constraints.
+- [x] Couple source particles to evolved fields with conserved deposition; retain a labelled test-particle option. General coupling acceptance remains subject to the budgets below.
 - [ ] Implement force/torque and mechanical integration with field momentum, losses, source work and prescribed-drive work in the accounting.
 - [ ] Verify force reversal on charge reversal, uniform-field particle motion, attraction of oppositely charged bodies, and an isolated body's absence of a systematic spurious grid thrust under refinement.
 - [ ] Upgrade magnet-through-loop to a resolved passive conducting loop; verify induced current opposes flux change and energy transfers to field/loss/mechanical work. Keep impressed-current loops explicitly distinct.
@@ -227,7 +229,7 @@ Update `src/app/controller.ts`, `store.ts`, `App.tsx`, `src/scene/types.ts`, `de
 - [ ] Add WebGPU stepping after CPU acceptance, and compare fields/constraints/diagnostics at fixed step counts with the CPU backend. Keep GPU state resident; transfer only requested samples/overlays, and preserve a CPU fallback.
 - [ ] Provide one-clock transport, physical-time targets, wall-time estimates, consistent frame geometry/fields, force/current overlays, and truthful full-wave voltage/probe readouts.
 - [ ] Migrate every preset only when its material, charge, circuit and dynamics semantics are supported; expose unresolved choices instead of silently using old static fields.
-- [ ] Replace the existing split physics dispatch for migrated scenes, preserving Add, custom curves, saved scene editing, and transparency/probe features. Do not introduce the redundant top mode selector.
+- [x] Replace the existing split physics dispatch for migrated scenes, preserving Add, custom curves, saved scene editing, and transparency/probe features. Do not introduce the redundant top mode selector.
 - [ ] Run CPU/GPU numerical suites, existing regression tests, browser tests, production build, and replay/import/export checks.
 
 **Acceptance:** Full browser workflow for a moving capacitor and magnet/loop, both motion options, replay preserving edits, and documented measured performance. Static hosting remains sufficient; native Meep is an offline validation dependency only. There is no promise of a realtime 1 Hz mechanical cycle on an explicit full-wave grid.

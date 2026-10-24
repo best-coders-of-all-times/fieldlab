@@ -53,3 +53,20 @@ Conducting-node charge gathers Lorentz force with the same momentum-compatible s
 The explicit conductive response checks the actual gather/deposition row bound with the wave CFL and fastest stationary material speed. Separate bodies sharing unresolved current support are rejected. These are numerical admission checks, not a proof of all moving-material energy behavior. The scene model is finite conductivity, not moving PEC or real-metal dispersion. The independently tested planar moving-interface experiments are described in [the material report](maxwell-moving-material-validation.md); those Eulerian prototypes do not certify the body-carried scene graph at high speeds.
 
 The scene solver remains experimental pending the remaining general moving-matter, feed, force/momentum and backend acceptance requirements in the approved plan.
+
+
+## Normal sheet motion and changing electric fields
+
+A reduced-dimensional reference in `tests/maxwell/normal-moving-planes.test.ts` evolves two finite-width charge sheets moving apart along their normals. Uniform periodic transverse directions represent infinite planes; this is a charge-source Maxwell reference, not a finite-conductor or moving-mirror acceptance case. The physical cubic-spline width is fixed at 0.025 m, surface charge is +/-1 nC/m^2, initial centers 0.3/0.7 m and imposed speeds -/+0.01c. Actual native charge/current are advanced for 20 field steps on 65 longitudinal nodes.
+
+For normalized longitudinal density f and its cumulative F, the continuum reference is
+
+```text
+rho = sigma [f(x-a(t)) - f(x-b(t))]
+Jx = sigma [a_dot f(x-a(t)) - b_dot f(x-b(t))]
+Ex = sigma/epsilon0 [F(x-a(t)) - F(x-b(t))]
+Jx + epsilon0 dEx/dt = 0
+B = 0
+```
+
+The native endpoint-conserving current enforces the same cancellation. The test verifies changing E (over 1 V/m at some locations), deposited-charge consistency, convection/displacement cancellation, exact zero B and the electric energy/current-work balance. Thus a changing electric field does not alone require nonzero B: Ampere-Maxwell depends on the sum of conduction/convection and displacement currents. Motion direction, finite edges and source history matter. The existing transverse co-translation capacitor benchmark and finite conducting scenes still require their own magnetic-response validation.

@@ -3,11 +3,44 @@ import { restoreScene } from '../src/app/restoreScene';
 import { useAppStore } from '../src/app/store';
 import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil, makeDielectric, makeCharge, makeParticle } from '../src/scene/defaults';
 import { getPreset } from '../src/scene/presets';
+import { ParticleSystem } from '../src/engine/particles/system';
 
 const initial = useAppStore.getState();
 afterEach(() => useAppStore.setState(initial, true));
 
 describe('simulation model migration', () => {
+  it('keeps approximation particles without feedback regardless of their retained Maxwell choice', () => {
+    const objects = [makeParticle([-0.1, 0, 0]), makeParticle([0.1, 0, 0])];
+    for (const object of objects) Object.assign(object, { charge: 1e-12, mass: 1e-23, sourceProfile: 'smooth', sourceWidth: 10 });
+    const scene = makeScene({ name: 'approximation feedback retention', objects });
+    scene.simulation.externalField = [100, 0, 0];
+    const legacy = new ParticleSystem(scene).advance(0.01)!;
+    for (const fieldFeedback of ['source', 'testParticle'] as const) {
+      const explicit = new ParticleSystem({ ...scene, objects: objects.map(object => ({ ...object, fieldFeedback })) }).advance(0.01)!;
+      expect(explicit).toEqual(legacy);
+      for (const particle of explicit.particles) {
+        expect(particle.E).toEqual([100, 0, 0]);
+        expect(particle.velocity[0]).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('retains legacy particle feedback and preserves explicit choices with dormant source parameters on switches and reload', () => {
+    const object = makeParticle(), scene = makeScene({ name: 'feedback persistence', objects: [object] });
+    expect(restoreScene(JSON.parse(JSON.stringify(scene)), scene)!.objects[0]).not.toHaveProperty('fieldFeedback');
+    useAppStore.setState({ scene });
+    for (const fieldFeedback of ['source', 'testParticle', 'source'] as const) {
+      useAppStore.getState().updateObject(object.id, { fieldFeedback, sourceProfile: 'smooth', sourceWidth: 0.073 });
+      for (const useApproximation of [false, true, false]) {
+        useAppStore.getState().setSimulation({ useApproximation });
+        useAppStore.getState().rewindSimulation();
+        const restored = restoreScene(JSON.parse(JSON.stringify(useAppStore.getState().scene)), scene)!;
+        expect(restored.objects[0]).toMatchObject({ fieldFeedback, sourceProfile: 'smooth', sourceWidth: 0.073 });
+        expect(restored.simulation.useApproximation).toBe(useApproximation);
+      }
+    }
+  });
+
   it.each([makeCharge(), makeParticle()])('retains undefined legacy $kind source profiles through reload, rewind and solver switches', object => {
     const scene = makeScene({ name: 'legacy source', objects: [object] });
     useAppStore.setState({ scene });

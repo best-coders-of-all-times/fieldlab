@@ -45,6 +45,9 @@ type ConductingBody = ConductorObject | WireObject | LoopObject | CoilObject;
 function usesParticleDynamics(o: SceneObject) {
   return (isCharge(o) || isParticle(o)) && (o.dynamics?.mode === 'forceDriven' || isParticle(o) && !o.dynamics && !o.motion);
 }
+function isTestParticle(o: SceneObject) {
+  return isParticle(o) && o.fieldFeedback === 'testParticle';
+}
 function isConductingBody(o: SceneObject): o is ConductingBody {
   return isConductor(o) || (o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil') && o.electricalModel === 'conducting';
 }
@@ -113,7 +116,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       validateSubluminalVelocity(velocity);
       this.bodies.set(object.id, { position: [...object.position], rotation: [...object.rotation], velocity: [...velocity],
         angularVelocity: [...(active ? dynamics?.angularVelocity ?? [0, 0, 0] : [0, 0, 0])] as Vec3, momentum: usesParticleDynamics(object) ? momentumFromVelocity(velocity, dynamics?.mass ?? (isParticle(object) ? object.mass : 1)) : [0, 0, 0] });
-      if (isCharge(object) || isParticle(object)) this.charges.push({ object, local: [0, 0, 0], charge: object.charge });
+      if ((isCharge(object) || isParticle(object)) && !isTestParticle(object)) this.charges.push({ object, local: [0, 0, 0], charge: object.charge });
       else if (isChargedSphere(object)) {
         const shells = object.shell ? 1 : 4, per = 48;
         for (let shell = 0; shell < shells; shell++) for (let i = 0; i < per; i++) {
@@ -205,7 +208,8 @@ export class MaxwellSceneSolver extends MaxwellSampler {
         const sigma = o.conductivity ?? 0.01;
         if (!(sigma >= 0 && Number.isFinite(sigma)) || sigma * this.core.dt / EPS0 > this.explicitOhmLimit()) throw new Error(`${o.name}: conductivity is too stiff for the combined wave/current stability limit. Reduce CFL, refine the grid or explicitly choose a lower conductivity; no hidden conductivity cap is applied.`);
       }
-      if (isCharge(o) || isParticle(o)) {
+      if (isParticle(o) && o.fieldFeedback !== undefined && o.fieldFeedback !== 'source' && o.fieldFeedback !== 'testParticle') throw new Error(`${o.name}: unsupported particle field feedback mode.`);
+      if ((isCharge(o) || isParticle(o)) && !isTestParticle(o)) {
         if (o.sourceProfile !== undefined && o.sourceProfile !== 'cic' && o.sourceProfile !== 'smooth') throw new Error(`${o.name}: unsupported charge source profile.`);
         if (o.sourceProfile === 'smooth' && !(Number.isFinite(o.sourceWidth) && o.sourceWidth! > 0)) throw new Error(`${o.name}: smooth source width must be finite and positive in metres.`);
       }
@@ -506,11 +510,13 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   }
 
   private sourceWidth(object: SceneObject): number | undefined {
-    return (isCharge(object) || isParticle(object)) && object.sourceProfile === 'smooth' ? object.sourceWidth : undefined;
+    return (isCharge(object) || isParticle(object)) && !isTestParticle(object) && object.sourceProfile === 'smooth' ? object.sourceWidth : undefined;
   }
 
-  /** Force fields for the explicitly selected source shape. Point probes remain local. */
+  /** Source particles gather their charge shape; test particles sample local
+   * evolved E and synchronized B without any source-shape averaging. */
   sampleSourceForForce(object: SceneObject, point: Vec3) {
+    if (isTestParticle(object)) return this.sampleEB(point);
     const width = this.sourceWidth(object);
     if (width === undefined) return this.sampleForForce(point);
     const s = this.core, center = this.gridPoint(point);
@@ -539,7 +545,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   private sourceParticleState() {
     let kinetic = 0, count = 0;
     const momentum: Vec3 = [0, 0, 0];
-    for (const object of this.scene.objects) if (object.visible && usesParticleDynamics(object) && (isCharge(object) || isParticle(object))) {
+    for (const object of this.scene.objects) if (object.visible && usesParticleDynamics(object) && (isCharge(object) || isParticle(object)) && !isTestParticle(object)) {
       const body = this.bodies.get(object.id)!, mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1);
       const field = this.sampleSourceForForce(object, body.position);
       // The integrator stores p at t-dt/2. This reversible half kick estimates

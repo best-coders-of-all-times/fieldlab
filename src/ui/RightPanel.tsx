@@ -376,6 +376,12 @@ function ObjectPhysics({
         <Field label="Mass">
           <NumberInput value={obj.mass} step={1e-31} unit="kg" onChange={(v) => patch({ mass: Math.max(1e-31, v), species: 'custom' })} />
         </Field>
+        {fullMaxwell && <Field label="Field feedback" hint="Choose whether this particle deposits charge and current into the Maxwell fields">
+          <Select value={obj.fieldFeedback ?? 'source'} options={[
+            { value: 'source', label: 'Source particle' },
+            { value: 'testParticle', label: 'Test particle, no feedback' },
+          ]} onChange={fieldFeedback => patch({ fieldFeedback })} />
+        </Field>}
         <SourceProfile obj={obj} patch={patch} fullMaxwell={fullMaxwell} />
         {!fullMaxwell && <Field label="Initial velocity">
           <Vec3Input value={obj.velocity} step={1e5} unit="m/s" onChange={(v) => patch({ velocity: v })} />
@@ -383,7 +389,7 @@ function ObjectPhysics({
         <Field label="Trail points">
           <Slider value={obj.trailLength} min={100} max={3000} step={50} format={(v) => `${Math.round(v)}`} onChange={(v) => patch({ trailLength: Math.round(v) })} />
         </Field>
-        <div className="note">{fullMaxwell ? 'Source particle coupled to the evolved field clock and deposited charge/current. Set initial velocity in Dynamics above; explicit Dynamics mass overrides the species mass.' : 'Test particle with Boris pusher. Fields come from the statics engine or the external E/B settings.'}</div>
+        <div className="note">{fullMaxwell ? `${obj.fieldFeedback === 'testParticle' ? 'Test particle follows local evolved E/B on the field clock. Charge/current feedback is intentionally neglected, and its kinetic energy is excluded from source-particle coupling diagnostics.' : 'Source particle coupled to the evolved field clock and deposited charge/current.'} Set initial velocity in Dynamics above; explicit Dynamics mass overrides the species mass.` : 'Approximation always uses test particles, regardless of the retained Maxwell feedback choice. Fields come from the statics engine or the external E/B settings.'}</div>
       </PanelSection>
     );
   }
@@ -484,25 +490,27 @@ function SourceProfile({ obj, patch, fullMaxwell }: {
   fullMaxwell: boolean;
 }) {
   const smooth = obj.sourceProfile === 'smooth';
+  const testParticle = fullMaxwell && isParticle(obj) && obj.fieldFeedback === 'testParticle';
   if (!fullMaxwell && !smooth) return null;
   const sourceWidth = obj.sourceWidth ?? 0.05;
   return <>
     <Field label="Source profile" hint="Charge assignment used only by the full Maxwell solver">
-      <Select value={obj.sourceProfile ?? 'cic'} options={[
+      <Select value={obj.sourceProfile ?? 'cic'} disabled={testParticle} options={[
         { value: 'cic', label: 'Legacy grid CIC' },
         { value: 'smooth', label: 'Finite smooth cloud' },
       ]} onChange={sourceProfile => patch({ sourceProfile, ...(sourceProfile === 'smooth' ? { sourceWidth } : {}) })} />
     </Field>
     {smooth && <>
       <Field label="Source width" hint="Positive physical B-spline width in metres, independent of grid spacing">
-        <NumberInput value={sourceWidth} min={0} step={0.005} unit="m" onChange={width => {
+        <NumberInput value={sourceWidth} disabled={testParticle} min={0} step={0.005} unit="m" onChange={width => {
           if (Number.isFinite(width) && width > 0) patch({ sourceWidth: width });
         }} />
       </Field>
-      <div className="note">Separable compact cubic B-spline density with support center ±2 widths on each lab axis. Rotation does not rotate the density; no Lorentz contraction is applied. The full support must remain inside the physical domain, with one extra grid cell before a PEC wall. Coarse clouds can experience artificial mesh self-force. Resolve the width with multiple cells and check spatial and time convergence.</div>
+      {!testParticle && <div className="note">Separable compact cubic B-spline density with support center ±2 widths on each lab axis. Rotation does not rotate the density; no Lorentz contraction is applied. The full support must remain inside the physical domain, with one extra grid cell before a PEC wall. Coarse clouds can experience artificial mesh self-force. Resolve the width with multiple cells and check spatial and time convergence.</div>}
       {!fullMaxwell && <div className="note warn" role="alert">Smooth source profile is inactive in approximation mode. {obj.kind === 'charge' ? 'The charge uses the analytic point-charge field.' : 'This particle remains a test particle and does not source the fields.'} Profile and width remain saved for Maxwell mode.</div>}
     </>}
-    {fullMaxwell && <div className="note">{smooth ? 'Force-driven coupling is experimental. Selected smooth-cloud energy tests converge; mesh self-force and full momentum and material budgets remain under validation.' : 'Legacy CIC has a grid-dependent source size and large force/work mismatches in tested force-driven cases. A resolved finite smooth cloud improves selected energy tests; refine its width, grid and timestep before quantitative use.'}</div>}
+    {testParticle && <div className="note">Source profile and width are inactive for this test particle. Their values remain saved for switching back to a source particle; local E/B sampling does not average a finite cloud.</div>}
+    {fullMaxwell && !testParticle && <div className="note">{smooth ? 'Force-driven coupling is experimental. Selected smooth-cloud energy tests converge; mesh self-force and full momentum and material budgets remain under validation.' : 'Legacy CIC has a grid-dependent source size and large force/work mismatches in tested force-driven cases. A resolved finite smooth cloud improves selected energy tests; refine its width, grid and timestep before quantitative use.'}</div>}
   </>;
 }
 
@@ -556,7 +564,7 @@ function objectHelp(obj: SceneObject, fullMaxwell: boolean): string {
   if (fullMaxwell) {
     if (isWire(obj) && obj.electricalModel === 'currentFeed') return 'Externally powered terminal current filament. Positive current transfers charge from the first endpoint body to the last along the visible feed and return route. Stationary resolved contacts are required; voltage clamping and lead material response are not included.';
     if (isConductor(obj)) return 'Finite conductivity with transported free charge and a local rest-frame material response. Choose the explicit isolated initial-charge model in Solve.';
-    if (isParticle(obj)) return 'A source particle deposits charge and current into evolved Maxwell fields. A finite numerical charge shape is not a continuum point-particle self-force model.';
+    if (isParticle(obj)) return obj.fieldFeedback === 'testParticle' ? 'Test particle samples local evolved E/B on the Maxwell clock, with charge/current feedback intentionally neglected. Its kinetic energy is excluded from source-particle coupling diagnostics.' : 'A source particle deposits charge and current into evolved Maxwell fields. A finite numerical charge shape is not a continuum point-particle self-force model.';
     if (isMagnet(obj)) return 'Impressed magnetization source. Moving or force-driven magnet models require explicit solver support.';
     if (isWire(obj) || isLoop(obj) || isCoil(obj)) return obj.electricalModel === 'conducting' ? 'Resolved finite-conductivity passive material with evolving charge/current. Its wire diameter must span at least three cells; this is an experimental material model, not a general validated circuit solver.' : 'Externally imposed current. Choose passive finite conductivity for material-current feedback. Unsupported motion or force coupling is reported by the solver.';
     if (isProbe(obj)) return 'Passive E/B sampler. A unique electrostatic scalar potential is not available for the full time-dependent electric field.';
