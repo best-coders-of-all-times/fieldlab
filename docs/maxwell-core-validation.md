@@ -60,6 +60,8 @@ A separate uniform-field periodic test isolates the loss ledger without boundary
 
 ## CPML: reflected electric amplitude
 
+The measurements below use the stated finite windows. The later [extended CPML audit](maxwell-pml-validation.md) finds a delayed normal-pulse reflection exceeding the 1e-3 target in this historical profile, then validates a correction to its physical-width scaling. Its report distinguishes old and corrected measurements and unresolved oblique late tails. These early-window tables are historical; they do not establish long-time absorption or complete M3 acceptance.
+
 Reflection is measured with paired short and longer domains sharing the same initial incident packet, left PML, and probe. The longer domain places its significant far-boundary reflected pulse outside the observation window. Subtracting the probe fields removes the incident pulse and common initialization/propagation error. The reported quantity is the maximum reflected electric amplitude divided by maximum incident electric amplitude, not residual whole-domain energy. No static background is captured in these propagating-wave tests.
 
 At normal incidence, the carrier wavelength is 0.14 m, the Gaussian width is 0.035 m, the packet starts at x = 0.3 m, and the probe is at x = 0.45 m. The short/long physical intervals are 1/1.8 m. Incident and reflected time windows are respectively `ct < 0.5 m` and `0.7 m < ct < 2 m`.

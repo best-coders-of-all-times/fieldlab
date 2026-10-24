@@ -23,7 +23,11 @@ export class Cpml<P extends YeePrecision = 'float64'> {
         if (u <= 0) continue;
         // sigma/epsilon has units 1/s. Matched electric/magnetic stretching.
         const rate = -4 * speed * Math.log(1e-8) / (2 * cells * spacing[axis]) * u ** 3;
-        const alpha = 0.05 * speed / spacing[axis] * (1 - Math.min(1, u));
+        // Keep the continuous absorber profile fixed when refining a layer
+        // of fixed physical thickness. Scaling alpha by one grid cell would
+        // increase its frequency shift under refinement and weaken absorption
+        // of the same low-frequency pulse.
+        const alpha = 0.05 * speed / (cells * spacing[axis]) * (1 - Math.min(1, u));
         k[j] = 1 + 4 * u ** 3;
         b[j] = Math.exp(-(rate / k[j] + alpha) * dt);
         a[j] = rate * (b[j] - 1) / (k[j] * (rate + k[j] * alpha));

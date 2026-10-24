@@ -66,6 +66,8 @@ npm run bench:maxwell -- --json artifacts/maxwell-benchmark.json --report docs/m
 
 ## Validation and remaining work
 
+- [Production-browser performance](docs/maxwell-browser-performance.md): actual built website, local worker, physical-step targets and measured preparation/sampling/payload cost; short headless smoke observations.
+- [Extended CPML audit](docs/maxwell-pml-validation.md): finite pulse, thickness/grid/domain and longer-time checks. Records the original delayed-reflection failure and the physical-profile correction; early small reflection alone is insufficient acceptance.
 - [CPU Float32 storage comparison](docs/maxwell-precision-validation.md): optional kernel storage against the Float64 reference. The website still uses Float64; this is not WebGPU parity.
 - [Momentum and surface-stress audit](docs/maxwell-momentum-validation.md): fixed physical control surfaces, initial Coulomb stress, reconstruction sensitivity and remaining spatial error.
 - [Passive-body energy audit](docs/maxwell-passive-energy-validation.md): actual magnetic drag, polarization, signed material work and measured closed-budget limits.
