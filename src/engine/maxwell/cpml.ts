@@ -1,13 +1,20 @@
-/** Convolutional stretched-coordinate PML. Each curl derivative owns its history. */
-export class Cpml {
-  readonly memories: Float64Array[];
-  readonly reference: Float64Array[];
+export type YeePrecision = 'float32' | 'float64';
+export type YeeArray<P extends YeePrecision = 'float64'> = P extends 'float32' ? Float32Array : Float64Array;
+
+/** Convolutional stretched-coordinate PML. Each curl derivative owns its history.
+ * Profiles and coefficient evaluation remain Float64 in the CPU storage modes.
+ */
+export class Cpml<P extends YeePrecision = 'float64'> {
+  readonly memories: YeeArray<P>[];
+  readonly reference: YeeArray<P>[];
   private readonly coefficients: { a: Float64Array; b: Float64Array; k: Float64Array }[][];
 
-  constructor(private readonly shape: number[], spacing: number[], boundaries: string[], cells: number, dt: number, speed: number) {
+  constructor(private readonly shape: number[], spacing: number[], boundaries: string[], cells: number, dt: number, speed: number, precision: P = 'float64' as P) {
+    if (precision !== 'float32' && precision !== 'float64') throw new Error('Invalid Yee precision');
     const size = shape[0] * shape[1] * shape[2];
-    this.memories = Array.from({ length: 12 }, () => new Float64Array(size));
-    this.reference = Array.from({ length: 12 }, () => new Float64Array(size));
+    const allocate = () => (precision === 'float32' ? new Float32Array(size) : new Float64Array(size)) as YeeArray<P>;
+    this.memories = Array.from({ length: 12 }, allocate);
+    this.reference = Array.from({ length: 12 }, allocate);
     this.coefficients = shape.map((n, axis) => [0, 0.5].map(offset => {
       const a = new Float64Array(n), b = new Float64Array(n), k = new Float64Array(n).fill(1);
       if (boundaries[axis] !== 'pml') return { a, b, k };

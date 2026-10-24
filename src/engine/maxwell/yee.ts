@@ -1,25 +1,29 @@
-import { Cpml } from './cpml';
+import { Cpml, type YeeArray, type YeePrecision } from './cpml';
+export type { YeeArray, YeePrecision } from './cpml';
 
 export const LIGHT_SPEED = 299792458;
 export const EPSILON_0 = 8.8541878128e-12;
 export const MU_0 = 1 / (EPSILON_0 * LIGHT_SPEED ** 2);
 export type YeeBoundary = 'periodic' | 'pec' | 'pml';
-export interface YeeOptions {
+export interface YeeOptions<P extends YeePrecision = 'float64'> {
   nx: number; ny: number; nz: number; dx: number; dy: number; dz: number;
   cfl?: number; dt?: number; boundary: { x: YeeBoundary; y: YeeBoundary; z: YeeBoundary }; pmlCells?: number;
+  precision?: P;
 }
 const fieldNames = ['Ex', 'Ey', 'Ez', 'Bx', 'By', 'Bz', 'Jx', 'Jy', 'Jz', 'rho'] as const;
 const materialNames = ['epsX', 'epsY', 'epsZ', 'muX', 'muY', 'muZ', 'sigmaX', 'sigmaY', 'sigmaZ'] as const;
 type FieldName = typeof fieldNames[number];
 type MaterialName = typeof materialNames[number];
-export type DrudeCoefficient = number | { x: number | Float64Array; y: number | Float64Array; z: number | Float64Array };
+export type DrudeCoefficient = number | { x: number | Float32Array | Float64Array; y: number | Float32Array | Float64Array; z: number | Float32Array | Float64Array };
 export interface DrudeOptions { omegaP: DrudeCoefficient; gamma?: DrudeCoefficient; }
 const drudeNames = ['omegaPX', 'omegaPY', 'omegaPZ', 'gammaX', 'gammaY', 'gammaZ', 'Jx', 'Jy', 'Jz'] as const;
-export type DrudeState = Record<typeof drudeNames[number], Float64Array> & { loss: number };
-export type YeeSnapshot = Record<FieldName | MaterialName, Float64Array> & {
-  time: number; steps: number; ohmicLoss: number; sourceWork: number; cpml: Float64Array[]; cpmlReference: Float64Array[]; boundaryE: Float64Array[];
-  drude: DrudeState | null;
-  conduction: Float64Array[];
+export type DrudeState<P extends YeePrecision = 'float64'> = Record<typeof drudeNames[number], YeeArray<P>> & { loss: number };
+export type YeeSnapshot<P extends YeePrecision = 'float64'> = Record<FieldName | MaterialName, YeeArray<P>> & {
+  /** Missing metadata denotes a legacy Float64 snapshot. Cross-precision restore is rejected. */
+  precision?: P;
+  time: number; steps: number; ohmicLoss: number; sourceWork: number; cpml: YeeArray<P>[]; cpmlReference: YeeArray<P>[]; boundaryE: YeeArray<P>[];
+  drude: DrudeState<P> | null;
+  conduction: YeeArray<P>[];
 };
 export interface YeeDiagnostics {
   divergenceE: number; divergenceB: number; charge: number; electricEnergy: number;
@@ -31,26 +35,29 @@ export interface YeeDiagnostics {
  * A nonperiodic axis has its PEC closure at nodal coordinate 0 (and n).
  * CPML uses that PEC backing wall; its cells are excluded from Gauss diagnostics.
  */
-export class YeeSolver {
+export class YeeSolver<P extends YeePrecision = 'float64'> {
+  readonly precision: P;
   readonly nx: number; readonly ny: number; readonly nz: number;
   readonly dx: number; readonly dy: number; readonly dz: number; readonly dt: number;
-  readonly Ex: Float64Array; readonly Ey: Float64Array; readonly Ez: Float64Array;
-  readonly Bx: Float64Array; readonly By: Float64Array; readonly Bz: Float64Array;
-  readonly Jx: Float64Array; readonly Jy: Float64Array; readonly Jz: Float64Array; readonly rho: Float64Array;
-  readonly epsX: Float64Array; readonly epsY: Float64Array; readonly epsZ: Float64Array;
-  readonly muX: Float64Array; readonly muY: Float64Array; readonly muZ: Float64Array;
-  readonly sigmaX: Float64Array; readonly sigmaY: Float64Array; readonly sigmaZ: Float64Array;
+  readonly Ex: YeeArray<P>; readonly Ey: YeeArray<P>; readonly Ez: YeeArray<P>;
+  readonly Bx: YeeArray<P>; readonly By: YeeArray<P>; readonly Bz: YeeArray<P>;
+  readonly Jx: YeeArray<P>; readonly Jy: YeeArray<P>; readonly Jz: YeeArray<P>; readonly rho: YeeArray<P>;
+  readonly epsX: YeeArray<P>; readonly epsY: YeeArray<P>; readonly epsZ: YeeArray<P>;
+  readonly muX: YeeArray<P>; readonly muY: YeeArray<P>; readonly muZ: YeeArray<P>;
+  readonly sigmaX: YeeArray<P>; readonly sigmaY: YeeArray<P>; readonly sigmaZ: YeeArray<P>;
   time = 0; steps = 0;
   private ohmicLoss = 0; private sourceWork = 0;
   private readonly shape: number[]; private readonly spacing: number[]; private readonly boundaries: YeeBoundary[];
-  private readonly pmlCells: number; private readonly pml: Cpml | null;
+  private readonly pmlCells: number; private readonly pml: Cpml<P> | null;
   private readonly previous: Int32Array[]; private readonly next: Int32Array[];
-  private readonly conduction: Float64Array[];
+  private readonly conduction: YeeArray<P>[];
   private readonly boundaryIndices: Int32Array[];
-  private readonly boundaryE: Float64Array[];
-  private _drude: DrudeState | null = null;
+  private readonly boundaryE: YeeArray<P>[];
+  private _drude: DrudeState<P> | null = null;
 
-  constructor(o: YeeOptions) {
+  constructor(o: YeeOptions<P>) {
+    this.precision = (o.precision ?? 'float64') as P;
+    if (this.precision !== 'float32' && this.precision !== 'float64') throw new Error('Invalid Yee precision');
     this.shape = [o.nx, o.ny, o.nz]; this.spacing = [o.dx, o.dy, o.dz];
     this.boundaries = [o.boundary.x, o.boundary.y, o.boundary.z];
     if (this.shape.some(n => !Number.isSafeInteger(n) || n < 1) || this.spacing.some(h => !(h > 0 && Number.isFinite(h)))) throw new Error('Invalid Yee grid');
@@ -61,7 +68,7 @@ export class YeeSolver {
     if (!(cfl > 0 && cfl <= 1)) throw new Error('CFL factor must be in (0,1]');
     this.dt = o.dt ?? cfl / (LIGHT_SPEED * Math.sqrt(this.spacing.reduce((s, h, a) => s + (this.shape[a] > 1 ? 1 / h ** 2 : 0), 0) || 1 / o.dx ** 2));
     if (!(this.dt > 0 && Number.isFinite(this.dt))) throw new Error('Invalid timestep');
-    const allocate = (value = 0) => new Float64Array(size).fill(value);
+    const allocate = (value = 0) => this.allocate(size, value);
     this.Ex = allocate(); this.Ey = allocate(); this.Ez = allocate();
     this.Bx = allocate(); this.By = allocate(); this.Bz = allocate();
     this.Jx = allocate(); this.Jy = allocate(); this.Jz = allocate(); this.rho = allocate();
@@ -76,27 +83,31 @@ export class YeeSolver {
         q[axis] = (p[axis] + this.shape[axis] - 1) % this.shape[axis]; this.previous[axis][i] = this.index(q[0], q[1], q[2]);
       }
     }
-    this.conduction = [new Float64Array(size), new Float64Array(size), new Float64Array(size)];
+    this.conduction = [allocate(), allocate(), allocate()];
     this.pmlCells = o.pmlCells ?? 8;
     for (let a = 0; a < 3; a++) if (this.boundaries[a] === 'pml' && (this.pmlCells < 2 || 2 * this.pmlCells >= this.shape[a])) throw new Error('PML requires at least two cells and a nonempty physical interior');
-    this.pml = this.boundaries.includes('pml') ? new Cpml(this.shape, this.spacing, this.boundaries, this.pmlCells, this.dt, LIGHT_SPEED) : null;
+    this.pml = this.boundaries.includes('pml') ? new Cpml(this.shape, this.spacing, this.boundaries, this.pmlCells, this.dt, LIGHT_SPEED, this.precision) : null;
     const pinned: number[][] = [[], [], []];
     for (let z = 0; z < this.nz; z++) for (let y = 0; y < this.ny; y++) for (let x = 0; x < this.nx; x++) {
       const pos = [x, y, z], index = this.index(x, y, z);
       for (let component = 0; component < 3; component++) if (pos.some((v, axis) => axis !== component && this.boundaries[axis] !== 'periodic' && v === 0)) pinned[component].push(index);
     }
     this.boundaryIndices = pinned.map(indices => Int32Array.from(indices));
-    this.boundaryE = pinned.map(indices => new Float64Array(indices.length));
+    this.boundaryE = pinned.map(indices => this.allocate(indices.length));
     this.validateMaterials();
   }
 
   index(x: number, y: number, z: number) { return x + this.nx * (y + this.ny * z); }
 
+  private allocate(length: number, value = 0): YeeArray<P> {
+    return (this.precision === 'float32' ? new Float32Array(length) : new Float64Array(length)).fill(value) as YeeArray<P>;
+  }
+
   /** Optional stationary pole. omegaP is angular rad/s; gamma is damping s^-1.
    * The existing eps arrays are epsilon-infinity; these J arrays are at t-dt/2.
-   * Nine Float64 arrays (72 bytes/cell) exist only while the pole is enabled.
+   * Nine arrays (72 bytes/cell in Float64, 36 in Float32) exist only while enabled.
    */
-  get drude(): DrudeState | null { return this._drude; }
+  get drude(): DrudeState<P> | null { return this._drude; }
 
   /** Current density in the latest Ampere update (t-dt/2), at its native edge.
    * The impressed J arrays must still contain that update's deposited current.
@@ -113,13 +124,13 @@ export class YeeSolver {
     const size = this.rho.length;
     const coefficient = (value: DrudeCoefficient, axis: 'x' | 'y' | 'z') => {
       const input = typeof value === 'number' ? value : value[axis];
-      if (typeof input === 'number') return new Float64Array(size).fill(input);
-      if (!(input instanceof Float64Array) || input.length !== size) throw new Error('Drude coefficient array must match the Yee grid');
-      return input.slice();
+      if (typeof input === 'number') return this.allocate(size, input);
+      if (!(input instanceof Float64Array || input instanceof Float32Array) || input.length !== size) throw new Error('Drude coefficient array must match the Yee grid');
+      const result = this.allocate(size); result.set(input); return result;
     };
-    const state: DrudeState = { omegaPX: coefficient(options.omegaP, 'x'), omegaPY: coefficient(options.omegaP, 'y'), omegaPZ: coefficient(options.omegaP, 'z'),
+    const state: DrudeState<P> = { omegaPX: coefficient(options.omegaP, 'x'), omegaPY: coefficient(options.omegaP, 'y'), omegaPZ: coefficient(options.omegaP, 'z'),
       gammaX: coefficient(options.gamma ?? 0, 'x'), gammaY: coefficient(options.gamma ?? 0, 'y'), gammaZ: coefficient(options.gamma ?? 0, 'z'),
-      Jx: new Float64Array(size), Jy: new Float64Array(size), Jz: new Float64Array(size), loss: 0 };
+      Jx: this.allocate(size), Jy: this.allocate(size), Jz: this.allocate(size), loss: 0 };
     const previous = this._drude; this._drude = state;
     try { this.validateMaterials(); } catch (error) { this._drude = previous; throw error; }
   }
@@ -313,25 +324,40 @@ export class YeeSolver {
     this.enforceBoundary(); return this.diagnostics().divergenceE;
   }
 
-  snapshot(): YeeSnapshot {
-    const result = { time: this.time, steps: this.steps, ohmicLoss: this.ohmicLoss, sourceWork: this.sourceWork,
-      cpml: this.pml?.memories.map(a => a.slice()) ?? [], cpmlReference: this.pml?.reference.map(a => a.slice()) ?? [] } as YeeSnapshot;
-    result.boundaryE = this.boundaryE.map(a => a.slice());
-    result.conduction = this.conduction.map(a => a.slice());
-    result.drude = this._drude ? { loss: this._drude.loss } as DrudeState : null;
-    if (result.drude && this._drude) for (const name of drudeNames) result.drude[name] = this._drude[name].slice();
-    for (const name of [...fieldNames, ...materialNames]) result[name] = this[name].slice();
+  snapshot(): YeeSnapshot<P> {
+    const copy = (a: YeeArray<P>) => a.slice() as YeeArray<P>;
+    const result = { precision: this.precision, time: this.time, steps: this.steps, ohmicLoss: this.ohmicLoss, sourceWork: this.sourceWork,
+      cpml: this.pml?.memories.map(copy) ?? [], cpmlReference: this.pml?.reference.map(copy) ?? [] } as YeeSnapshot<P>;
+    result.boundaryE = this.boundaryE.map(copy);
+    result.conduction = this.conduction.map(copy);
+    result.drude = this._drude ? { loss: this._drude.loss } as DrudeState<P> : null;
+    if (result.drude && this._drude) for (const name of drudeNames) result.drude[name] = copy(this._drude[name]);
+    for (const name of [...fieldNames, ...materialNames]) result[name] = copy(this[name]);
     return result;
   }
 
-  restore(state: YeeSnapshot) {
-    for (const name of [...fieldNames, ...materialNames]) { if (state[name].length !== this.rho.length) throw new Error('Snapshot grid mismatch'); this[name].set(state[name]); }
-    if (state.cpml.length !== (this.pml?.memories.length ?? 0)) throw new Error('Snapshot boundary mismatch');
+  restore(state: YeeSnapshot<P>) {
+    if ((state.precision ?? 'float64') !== this.precision) throw new Error('Snapshot precision mismatch');
+    // Validate storage and dimensions before mutating any live arrays.
+    const validate = (a: YeeArray<P> | undefined, length: number, kind: string) => {
+      if (!a || !(this.precision === 'float32' ? a instanceof Float32Array : a instanceof Float64Array)) throw new Error('Snapshot precision mismatch');
+      if (a.length !== length) throw new Error(`Snapshot ${kind} mismatch`);
+    };
+    for (const name of [...fieldNames, ...materialNames]) validate(state[name], this.rho.length, 'grid');
+    const validateGroup = (actual: YeeArray<P>[], saved: YeeArray<P>[], kind: string) => {
+      if (saved.length !== actual.length) throw new Error(`Snapshot ${kind} mismatch`);
+      actual.forEach((a, i) => validate(saved[i], a.length, kind));
+    };
+    validateGroup(this.pml?.memories ?? [], state.cpml, 'boundary');
+    validateGroup(this.pml?.reference ?? [], state.cpmlReference, 'boundary reference');
+    validateGroup(this.boundaryE, state.boundaryE, 'boundary edge');
+    validateGroup(this.conduction, state.conduction, 'conduction current');
+    if (state.drude) for (const name of drudeNames) validate(state.drude[name], this.rho.length, 'Drude grid');
+    for (const name of [...fieldNames, ...materialNames]) this[name].set(state[name]);
     this.pml?.memories.forEach((a, i) => a.set(state.cpml[i]));
-    if (state.cpmlReference.length !== (this.pml?.reference.length ?? 0)) throw new Error('Snapshot boundary reference mismatch');
     this.pml?.reference.forEach((a, i) => a.set(state.cpmlReference[i]));
-    this.boundaryE.forEach((a, i) => { if (a.length !== state.boundaryE[i]?.length) throw new Error('Snapshot boundary edge mismatch'); a.set(state.boundaryE[i]); });
-    this.conduction.forEach((a, i) => { if (a.length !== state.conduction[i]?.length) throw new Error('Snapshot conduction current mismatch'); a.set(state.conduction[i]); });
+    this.boundaryE.forEach((a, i) => a.set(state.boundaryE[i]));
+    this.conduction.forEach((a, i) => a.set(state.conduction[i]));
     this.configureDrude(state.drude ? { omegaP: { x: state.drude.omegaPX, y: state.drude.omegaPY, z: state.drude.omegaPZ }, gamma: { x: state.drude.gammaX, y: state.drude.gammaY, z: state.drude.gammaZ } } : null);
     if (this._drude && state.drude) { this._drude.Jx.set(state.drude.Jx); this._drude.Jy.set(state.drude.Jy); this._drude.Jz.set(state.drude.Jz); this._drude.loss = state.drude.loss; }
     this.time = state.time; this.steps = state.steps; this.ohmicLoss = state.ohmicLoss; this.sourceWork = state.sourceWork;
