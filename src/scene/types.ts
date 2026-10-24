@@ -28,6 +28,14 @@ export type MotionSpec = PeriodicMotion | {
   loop: boolean;
 };
 
+export interface BodyDynamics {
+  mode: 'fixed' | 'prescribed' | 'forceDriven';
+  mass: number; // kg
+  inertia: Vec3; // principal moments about local axes, kg m²
+  velocity: Vec3; // initial world velocity, m/s
+  angularVelocity: Vec3; // initial world angular velocity, rad/s
+}
+
 export interface SceneObjectBase {
   id: string;
   kind: string;
@@ -37,6 +45,7 @@ export interface SceneObjectBase {
   visible: boolean;
   locked?: boolean;
   motion?: MotionSpec;
+  dynamics?: BodyDynamics;
 }
 
 export interface ChargeObject extends SceneObjectBase {
@@ -61,6 +70,7 @@ export interface ConductorObject extends SceneObjectBase {
   potential: number; // V, used when floating=false
   floating: boolean;
   netCharge: number; // C, used when floating=true
+  conductivity?: number; // S/m; Maxwell finite-conductivity model, default 0.01
   color?: string;
 }
 
@@ -182,6 +192,10 @@ export interface Domain {
 export type BoundaryKind = 'pml' | 'pec' | 'periodic';
 
 export interface SimulationSettings {
+  /** Retain the electrostatic/quasistatic model; false selects Maxwell FDTD. */
+  useApproximation: boolean;
+  /** Explicitly initialize from authored voltages/charges, then disconnect supplies. */
+  maxwellConductorModel?: 'isolated';
   /** Number of cells along the longest domain axis (48/64/96). */
   resolution: 48 | 64 | 96;
   /** Static solver boundary. */

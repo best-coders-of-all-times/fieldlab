@@ -35,7 +35,7 @@ import {
   isWire,
 } from '../scene/types';
 import { formatPrefixed, formatSci } from '../engine/units';
-import { M_ELECTRON, M_PROTON, E_CHARGE } from '../engine/constants';
+import { M_ELECTRON, M_PROTON, E_CHARGE, C_LIGHT } from '../engine/constants';
 
 export function RightPanel() {
   const rightTab = useAppStore((s) => s.rightTab);
@@ -81,7 +81,7 @@ function Inspector() {
         <PanelSection title="Scene">
           <div className="theory-title">{scene.name}</div>
           {scene.subtitle && <div className="note">{scene.subtitle}</div>}
-          <div className="stat-line"><span>Mode</span><b>{scene.mode === 'fields' ? 'Fields (statics)' : 'Waves (FDTD)'}</b></div>
+          <div className="stat-line"><span>Solver</span><b>{scene.simulation.useApproximation === false ? 'Maxwell FDTD' : scene.mode === 'fields' ? 'Electrostatic / quasistatic' : 'Legacy wave FDTD'}</b></div>
           <div className="stat-line"><span>Objects</span><b>{scene.objects.length}</b></div>
           <div className="stat-line"><span>Domain</span><b>{scene.domain.size.map((v) => `${v.toFixed(2)}`).join(' × ')} m</b></div>
           <div className="note">Select an object in the viewport or object list to edit it.</div>
@@ -136,12 +136,12 @@ function Inspector() {
         </div>
       </PanelSection>
 
-      {scene.mode === 'fields' && <MotionEditor obj={obj} patch={patch} />}
+      {(scene.mode === 'fields' || scene.simulation.useApproximation === false) && obj.kind !== 'probe' && <MotionEditor obj={obj} patch={patch} />}
 
       <ObjectPhysics obj={obj} patch={patch} />
 
       <PanelSection title="About this object" defaultOpen={false}>
-        <div className="note">{objectHelp(obj)}</div>
+        <div className="note">{objectHelp(obj, scene.simulation.useApproximation === false)}</div>
       </PanelSection>
     </>
   );
@@ -154,6 +154,7 @@ function ObjectPhysics({
   obj: SceneObject;
   patch: (p: Partial<SceneObject>, history?: boolean) => void;
 }) {
+  const fullMaxwell = useAppStore(s => s.scene.simulation.useApproximation === false);
   if (isCharge(obj)) {
     return (
       <PanelSection title="Charge">
@@ -179,7 +180,7 @@ function ObjectPhysics({
           <NumberInput value={obj.radius} step={0.01} unit="m" onChange={(v) => patch({ radius: Math.max(0.01, v) })} />
         </Field>
         <CheckRow label="Charged shell (E=0 inside)" checked={obj.shell} onChange={(v) => patch({ shell: v })} />
-        <div className="note">Analytic field: linear inside a solid sphere, zero inside a shell, inverse-square outside.</div>
+        <div className="note">{fullMaxwell ? 'A resolved finite charge distribution sources the evolved fields. Resolve the radius with multiple cells.' : 'Analytic field: linear inside a solid sphere, zero inside a shell, inverse-square outside.'}</div>
       </PanelSection>
     );
   }
@@ -217,7 +218,10 @@ function ObjectPhysics({
             <NumberInput value={obj.potential} step={0.5} unit="V" onChange={(v) => patch({ potential: v })} />
           </Field>
         )}
-        <div className="note">PEC boundary for the Poisson / FDTD solvers. Surface charge is computed from the normal E field.</div>
+        {fullMaxwell && <Field label="Conductivity" hint="Finite conductivity in the Maxwell material rest frame. The explicit current update limits σ Δt / ε₀.">
+          <NumberInput value={obj.conductivity ?? 0.01} min={0} step={0.001} unit="S/m" onChange={conductivity => patch({ conductivity })} />
+        </Field>}
+        <div className="note">{fullMaxwell ? 'Finite-conductivity body. Voltages or net charges define initialization only after the isolated model is selected in Solve. There is no implicit battery or voltage clamp.' : 'Ideal equipotential region for the electrostatic Poisson solve.'}</div>
       </PanelSection>
     );
   }
@@ -244,7 +248,7 @@ function ObjectPhysics({
         <Field label="Relative permeability μᵣ">
           <Slider value={obj.muR} min={0.5} max={10} step={0.1} format={(v) => v.toFixed(2)} onChange={(v) => patch({ muR: v })} />
         </Field>
-        <div className="note">Permeability and conductivity affect wave scenes. Static B uses the vacuum Biot–Savart model; static dielectrics use permittivity.</div>
+        <div className="note">{fullMaxwell ? 'Stationary nondispersive material. Moving dielectric response requires a supported constitutive model; unsupported motion is rejected.' : 'Permeability and conductivity affect wave scenes. Static B uses the vacuum Biot–Savart model; static dielectrics use permittivity.'}</div>
         <Field label="Conductivity σ">
           <NumberInput value={obj.sigma} step={0.01} unit="S/m" onChange={(v) => patch({ sigma: Math.max(0, v) })} />
         </Field>
@@ -274,7 +278,7 @@ function ObjectPhysics({
           const end = obj.points.at(-1) ?? [0, 0, 0];
           patch({ points: [...obj.points, [end[0] + 0.05, end[1] + 0.05, end[2]]] });
         }}>Add control point</Button>
-        <div className="note">B is integrated with Biot–Savart over the filament. Current direction is from the first point to the last.</div>
+        <div className="note">{fullMaxwell ? 'Impressed filament current in the authored direction. This source is externally driven; it is not a passive circuit with induction feedback.' : 'B is integrated with Biot–Savart over the filament. Current direction is from the first point to the last.'}</div>
       </PanelSection>
     );
   }
@@ -360,7 +364,7 @@ function ObjectPhysics({
         <Field label="Trail points">
           <Slider value={obj.trailLength} min={100} max={3000} step={50} format={(v) => `${Math.round(v)}`} onChange={(v) => patch({ trailLength: Math.round(v) })} />
         </Field>
-        <div className="note">Boris pusher. Fields come from the statics engine or the external E/B settings.</div>
+        <div className="note">{fullMaxwell ? 'Source particle coupled to the evolved field clock and deposited charge/current. Dynamics overrides above take precedence over these legacy initial mass/velocity fields.' : 'Test particle with Boris pusher. Fields come from the statics engine or the external E/B settings.'}</div>
       </PanelSection>
     );
   }
@@ -373,7 +377,7 @@ function ObjectPhysics({
             options={[
               { value: 'E', label: 'Electric field E' },
               { value: 'B', label: 'Magnetic field B' },
-              { value: 'phi', label: 'Potential φ' },
+              ...(!fullMaxwell ? [{ value: 'phi' as const, label: 'Potential φ' }] : []),
               { value: 'energy', label: 'Energy density' },
             ]}
             onChange={(quantity) => patch({ quantity })}
@@ -407,7 +411,7 @@ function ObjectPhysics({
             onChange={(waveform) => patch({ waveform })}
           />
         </Field>
-        <div className="note">The source sheet launches along +x. Use periodic y/z walls for a clean 1D experiment.</div>
+        <div className="note">{fullMaxwell ? 'Physical electric current sheet normal to x, radiating in both directions. The amplitude specifies the incident E scale. Use periodic y/z walls for a 1D experiment.' : 'The source sheet launches along +x. Use periodic y/z walls for a clean 1D experiment.'}</div>
       </PanelSection>
     );
   }
@@ -424,8 +428,8 @@ function ObjectPhysics({
         <Field label="Frequency">
           <NumberInput value={obj.frequency / 1e6} step={10} unit="MHz" onChange={(v) => patch({ frequency: v * 1e6 })} />
         </Field>
-        <Field label="Amplitude">
-          <NumberInput value={obj.amplitude} step={0.1} unit="V/m" onChange={(v) => patch({ amplitude: v })} />
+        <Field label={fullMaxwell ? 'Electric current amplitude' : 'Amplitude'}>
+          <NumberInput value={obj.amplitude} step={0.1} unit={fullMaxwell ? 'A' : 'V/m'} onChange={(v) => patch({ amplitude: v })} />
         </Field>
         <Field label="Waveform">
           <Segmented
@@ -446,8 +450,8 @@ function ObjectPhysics({
         <Field label="Frequency">
           <NumberInput value={obj.frequency / 1e6} step={10} unit="MHz" onChange={(v) => patch({ frequency: v * 1e6 })} />
         </Field>
-        <Field label="Amplitude">
-          <NumberInput value={obj.amplitude} step={0.1} unit="V/m" onChange={(v) => patch({ amplitude: v })} />
+        <Field label={fullMaxwell ? 'Feed current amplitude' : 'Amplitude'}>
+          <NumberInput value={obj.amplitude} step={0.1} unit={fullMaxwell ? 'A' : 'V/m'} onChange={(v) => patch({ amplitude: v })} />
         </Field>
       </PanelSection>
     );
@@ -455,7 +459,14 @@ function ObjectPhysics({
   return null;
 }
 
-function objectHelp(obj: SceneObject): string {
+function objectHelp(obj: SceneObject, fullMaxwell: boolean): string {
+  if (fullMaxwell) {
+    if (isConductor(obj)) return 'Finite conductivity with transported free charge and a local rest-frame material response. Choose the explicit isolated initial-charge model in Solve.';
+    if (isParticle(obj)) return 'A source particle deposits charge and current into evolved Maxwell fields. A finite numerical charge shape is not a continuum point-particle self-force model.';
+    if (isMagnet(obj)) return 'Impressed magnetization source. Moving or force-driven magnet models require explicit solver support.';
+    if (isWire(obj) || isLoop(obj) || isCoil(obj)) return 'Externally imposed current; not a passive induction-feedback circuit. Unsupported motion or force coupling is reported by the solver.';
+    if (isProbe(obj)) return 'Passive E/B sampler. A unique electrostatic scalar potential is not available for the full time-dependent electric field.';
+  }
   if (isConductor(obj)) return 'In statics, this object is a Dirichlet region in the Poisson solve. In waves it is a perfect electric conductor (E=0 inside).';
   if (isDielectric(obj)) return 'Rasterised into εᵣ, μᵣ and σ cell arrays. Interfaces are staircased at the grid resolution.';
   if (isWire(obj) || isLoop(obj) || isCoil(obj)) return 'Current sources generate B via Biot–Savart in statics. In waves, a conductor/dielectric version can be used as an obstacle.';
@@ -469,7 +480,7 @@ function DisplayPanel() {
   const scene = useAppStore((s) => s.scene);
   const setDisplay = useAppStore((s) => s.setDisplay);
   const d = scene.display;
-  const waves = scene.mode === 'waves';
+  const waves = scene.mode === 'waves' || scene.simulation.useApproximation === false;
   const quantities: Array<{ value: SliceQuantity; label: string }> = waves
     ? [
         { value: 'Emag', label: '|E|' },
@@ -584,10 +595,38 @@ function SimulationPanel() {
   const scene = useAppStore((s) => s.scene);
   const setSimulation = useAppStore((s) => s.setSimulation);
   const sim = scene.simulation;
-  const waves = scene.mode === 'waves';
+  const fullMaxwell = sim.useApproximation === false;
+  const waves = scene.mode === 'waves' || fullMaxwell;
   const meta = useAppStore((s) => s.fdtdMeta);
+  const measurements = useAppStore(s => s.measurements);
+  const status = useAppStore(s => s.status);
+  const dx = Math.max(...scene.domain.size) / sim.resolution;
+  const estimatedDt = sim.cfl * dx / (C_LIGHT * Math.sqrt(3));
+  const dt = meta?.dt ?? estimatedDt;
+  const hasConductors = scene.objects.some(isConductor);
   return (
     <>
+      <PanelSection title="Physical model">
+        <CheckRow label="Use approximation" checked={!fullMaxwell} onChange={useApproximation => setSimulation({ useApproximation })} />
+        {!fullMaxwell && scene.mode === 'fields' && <div className="note">
+          Electrostatic E plus magnetostatic / quasistatic B saves computation. It does not evolve spatial induced E, radiation, or passive circuit feedback. Slow variation L/(cT) ≪ 1 and v/c ≪ 1 are useful conditions, but do not by themselves make omitted inductive effects negligible.
+        </div>}
+        {!fullMaxwell && scene.mode === 'waves' && <div className="note">The existing wave FDTD model remains selected. Full Maxwell scene coupling and its capability checks require switching approximation off.</div>}
+        {fullMaxwell && <>
+          <div className="note">Evolves Maxwell E and B for supported source and material models. Selecting the full equations does not implement every moving-material or circuit model. Unsupported configurations stop with an explicit error.</div>
+          <div className="note">Physical time is not animation wall time. Estimated Δt: {formatSci(dt, 4)} s; one physical second requires about {formatSci(1 / dt, 3)} field steps. A slow mechanical cycle can be extremely expensive. Steps per frame changes pacing, never c or the authored motion frequency.</div>
+          {hasConductors && <>
+            <CheckRow label="Initialize plate voltages, then isolate" checked={sim.maxwellConductorModel === 'isolated'} onChange={isolated => setSimulation({ maxwellConductorModel: isolated ? 'isolated' : undefined })} />
+            <div className={`note ${sim.maxwellConductorModel ? '' : 'warn'}`}>Authored potentials initialize conductor charge once. The bodies then evolve as isolated finite-conductivity objects: no battery, voltage clamp or hidden supply wires. Select this model explicitly to run conductors; driven terminal and return-path models require separate support.</div>
+          </>}
+          {measurements.extra && <>
+            <div className="stat-line"><span>Physical steps</span><b>{measurements.extra.steps?.toLocaleString() ?? '—'}</b></div>
+            <div className="stat-line"><span>Measured steps / second</span><b>{measurements.extra.stepsPerSecond?.toFixed(1) ?? '—'}</b></div>
+            <div className="stat-line"><span>Allocated field memory</span><b>{measurements.extra.estimatedBytes !== undefined ? `${(measurements.extra.estimatedBytes / 1048576).toFixed(1)} MiB` : '—'}</b></div>
+          </>}
+        </>}
+        {status.phase === 'error' && status.message && <div className="note warn" role="alert">{status.message}</div>}
+      </PanelSection>
       <PanelSection title="Grid & solver">
         <Field label="Resolution">
           <Segmented
@@ -631,7 +670,7 @@ function SimulationPanel() {
             {meta && meta.wavelengthCells > 0 && meta.wavelengthCells < 15 && (
               <div className="note warn">Wavelength is only {meta.wavelengthCells.toFixed(1)} cells. Increase resolution or lower frequency for a converged wave.</div>
             )}
-            <div className="note">The graded absorber is impedance-matched; reflections are small but not zero. Periodic walls give an exact 1D-embedded plane wave.</div>
+            <div className="note">Absorbing boundary accuracy depends on layer thickness, resolution, source band and incidence angle. Check convergence before interpreting weak reflected or radiated fields.</div>
           </>
         ) : (
           <>
@@ -721,7 +760,8 @@ function MeasurePanel() {
   const togglePanel = useAppStore((s) => s.togglePanel);
   const panels = useAppStore((s) => s.panels);
   const meta = useAppStore((s) => s.fdtdMeta);
-  const waves = scene.mode === 'waves';
+  const fullMaxwell = scene.simulation.useApproximation === false;
+  const waves = scene.mode === 'waves' || fullMaxwell;
 
   const cards: Array<{ label: string; value: string }> = [];
   if (summary?.hasGrid) {
@@ -772,6 +812,17 @@ function MeasurePanel() {
           </div>
         )}
       </PanelSection>
+
+      {fullMaxwell && <PanelSection title="Maxwell diagnostics">
+        {[
+          ['steps', 'Physical steps'], ['stepsPerSecond', 'Measured steps / second'],
+          ['gaussRelative', 'Relative Gauss residual'], ['divergenceE', 'Electric divergence residual'],
+          ['divergenceB', 'Magnetic divergence residual'], ['charge', 'Total charge (C)'],
+          ['totalEnergy', 'Field energy (J)'], ['ohmicLoss', 'Ohmic loss (J)'],
+          ['sourceWork', 'Source work (J)'], ['mechanicalWork', 'Mechanical work (J)'],
+        ].map(([key, label]) => <div className="stat-line" key={key}><span>{label}</span><b>{measurements.extra?.[key] !== undefined ? formatSci(measurements.extra[key], 4) : '—'}</b></div>)}
+        <div className="note">Residuals and budgets describe the selected discrete model. Resolution, domain, boundary and initialization refinement are still required for a physical conclusion.</div>
+      </PanelSection>}
 
       {inductionTelemetry.length > 0 && (
         <PanelSection title="Induction">

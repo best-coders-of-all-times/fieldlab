@@ -61,6 +61,7 @@ export function defaultDisplay(): DisplaySettings {
 
 export function defaultSimulation(): SimulationSettings {
   return {
+    useApproximation: true,
     resolution: 64,
     staticBoundary: 'open',
     externalField: [0, 0, 0],
@@ -124,6 +125,7 @@ export function makeConductor(
     potential: 0,
     floating: false,
     netCharge: 0,
+    conductivity: 0.01,
   };
 }
 

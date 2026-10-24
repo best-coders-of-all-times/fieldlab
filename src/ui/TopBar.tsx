@@ -14,6 +14,8 @@ export function TopBar() {
   const panels = useAppStore((s) => s.panels);
   const setPlaying = useAppStore((s) => s.setPlaying);
   const resetScene = useAppStore((s) => s.resetScene);
+  const rewindSimulation = useAppStore((s) => s.rewindSimulation);
+  const replaySimulation = useAppStore((s) => s.replaySimulation);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const togglePanel = useAppStore((s) => s.togglePanel);
@@ -87,8 +89,11 @@ export function TopBar() {
           <button className="icon-btn" onClick={step} title="Single step">
             <Icon name="step" size={16} />
           </button>
-          <button className="icon-btn" onClick={resetScene} title="Reset scene">
+          <button className="icon-btn" onClick={rewindSimulation} title="Rewind to t = 0">
             <Icon name="reset" size={16} />
+          </button>
+          <button className="icon-btn" onClick={replaySimulation} title="Replay">
+            <Icon name="play" size={16} />
           </button>
         </div>
 
@@ -100,10 +105,18 @@ export function TopBar() {
           <span className="status-dot" />
           {statusLabel}
         </span>
+        <span className="status-chip" title={scene.simulation.useApproximation === false
+          ? 'Evolved Maxwell fields for supported scene models. See Solve for setup and physical time cost.'
+          : 'Electrostatic/quasistatic fields, or the legacy wave solver. See Solve for validity limits.'}>
+          {scene.simulation.useApproximation === false ? 'Maxwell FDTD' : 'Approximation'}
+        </span>
 
         <span className="top-spacer" />
 
         <div className="top-actions">
+          <button className="icon-btn" onClick={resetScene} disabled={presetId === null} title="Restore preset (discard scene edits)" aria-label="Restore preset">
+            <Icon name="reset" size={16} />
+          </button>
           <button className="icon-btn" onClick={undo} disabled={past === 0} title="Undo (Ctrl+Z)">
             <Icon name="undo" size={16} />
           </button>

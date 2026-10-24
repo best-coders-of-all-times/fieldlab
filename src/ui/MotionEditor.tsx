@@ -1,9 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import type { MotionKeyframe, SceneObject } from '../scene/types';
+import { useAppStore } from '../app/store';
 import { Button, CheckRow, Field, NumberInput, PanelSection, Select, Vec3Input } from './controls';
 
 export function MotionEditor({ obj, patch }: { obj: SceneObject; patch: (p: Partial<SceneObject>) => void }) {
   const spec = obj.motion;
+  const approximate = useAppStore(s => s.scene.simulation.useApproximation !== false);
+  const mode = obj.dynamics?.mode ?? (spec ? 'prescribed' : obj.kind === 'particle' ? 'forceDriven' : 'fixed');
+  const dynamics = obj.dynamics ?? { mode, mass: obj.kind === 'particle' ? obj.mass : 1,
+    inertia: [1, 1, 1] as [number, number, number],
+    velocity: obj.kind === 'particle' ? obj.velocity : [0, 0, 0] as [number, number, number],
+    angularVelocity: [0, 0, 0] as [number, number, number] };
+  const forceModel = obj.kind === 'particle' || obj.kind === 'conductor';
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
@@ -32,6 +40,23 @@ export function MotionEditor({ obj, patch }: { obj: SceneObject; patch: (p: Part
     } catch (e) { setError((e as Error).message); }
   };
   return <PanelSection title="Motion">
+    <Field label="Dynamics">
+      <Select value={mode} options={[
+        { value: 'fixed', label: 'Fixed (external support)' },
+        { value: 'prescribed', label: 'Prescribed trajectory (external drive)' },
+        { value: 'forceDriven', label: 'Force driven by fields' },
+      ]} onChange={mode => patch({ dynamics: { ...dynamics, mode } })} />
+    </Field>
+    {mode === 'forceDriven' && <>
+      <Field label="Body mass"><NumberInput value={dynamics.mass} min={1e-40} unit="kg" onChange={mass => patch({ dynamics: { ...dynamics, mass } })} /></Field>
+      <Field label="Principal inertia" hint="Moments about the local x, y, z axes; positive values required"><Vec3Input value={dynamics.inertia} unit="kg m²" onChange={inertia => patch({ dynamics: { ...dynamics, inertia } })} /></Field>
+      <Field label="Initial linear velocity"><Vec3Input value={dynamics.velocity} unit="m/s" onChange={velocity => patch({ dynamics: { ...dynamics, velocity } })} /></Field>
+      <Field label="Initial angular velocity"><Vec3Input value={dynamics.angularVelocity} unit="rad/s" onChange={angularVelocity => patch({ dynamics: { ...dynamics, angularVelocity } })} /></Field>
+      {(approximate && !!obj.dynamics || !forceModel) && <div className="note warn" role="alert">This force-driven configuration is unsupported by the selected solver. Choose a supported Maxwell body model or another dynamics mode; the solver will report the missing capability.</div>}
+      {!approximate && forceModel && <div className="note">Force coupling requires the selected body model to pass solver capability checks. Conducting bodies use classical rigid-body mechanics with a nonrelativistic operating range.</div>}
+    </>}
+    {mode === 'fixed' && <div className="note">An external support holds the authored position and rotation.</div>}
+    {mode === 'prescribed' && <>
     <Field label="Trajectory">
       <Select value={spec?.kind ?? 'none'} onChange={changeKind} options={[
         { value: 'none', label: 'Stationary' }, { value: 'oscillate', label: 'Oscillate along axis' },
@@ -53,6 +78,7 @@ export function MotionEditor({ obj, patch }: { obj: SceneObject; patch: (p: Part
       <CheckRow label="Repeat trajectory" checked={spec.loop} onChange={loop => patch({ motion: { ...spec, loop } })} />
       <div className="note">Offsets are relative to Position and Rotation above. Values interpolate linearly; the final pose is held. Repeating jumps to the first pose, so match the endpoints for continuous motion.</div>
     </>}
-    {spec && <div className="note">Press Play to animate. Fields follow the moving sources using the quasistatic model. Prescribed particle motion replaces its Lorentz trajectory.</div>}
+    {spec && <div className="note">{approximate ? 'Fields follow the moving sources using the quasistatic model.' : 'Motion advances on physical field time. Moving material support is checked by the solver.'} Prescribed motion uses an external drive and replaces force-driven motion.</div>}
+    </>}
   </PanelSection>;
 }

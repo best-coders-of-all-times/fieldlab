@@ -73,6 +73,8 @@ interface AppState {
   setScene: (scene: Scene, opts?: { presetId?: string | null; history?: boolean }) => void;
   loadPreset: (id: string) => void;
   resetScene: () => void;
+  rewindSimulation: () => void;
+  replaySimulation: () => void;
   setMode: (mode: Scene['mode']) => void;
   updateObject: (id: string, patch: Partial<SceneObject>, history?: boolean) => void;
   addObject: (obj: SceneObject) => void;
@@ -121,6 +123,21 @@ export const useAppStore = create<AppState>((set, get) => {
       historyAt: now,
     }));
   };
+
+  const restartRuntime = (playing: boolean) => set((state) => ({
+    playing,
+    time: 0,
+    resetRequest: state.resetRequest + 1,
+    staticsSummary: null,
+    fdtdMeta: null,
+    measurements: {},
+    probes: [],
+    particleTelemetry: [],
+    inductionTelemetry: [],
+    chart: { series: [], points: [] },
+    status: { phase: 'solving' },
+    error: null,
+  }));
 
   return {
     scene: initial,
@@ -241,6 +258,9 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
 
+    rewindSimulation: () => restartRuntime(false),
+    replaySimulation: () => restartRuntime(true),
+
     resetScene: () => {
       const { presetId, scene } = get();
       const preset = presetId ? getPreset(presetId) : undefined;
@@ -336,9 +356,13 @@ export const useAppStore = create<AppState>((set, get) => {
     setDisplay: (patch) => set((state) => ({
       scene: { ...state.scene, display: { ...state.scene.display, ...patch } },
     })),
-    setSimulation: (patch) => set((state) => ({
-      scene: { ...state.scene, simulation: { ...state.scene.simulation, ...patch } },
-    })),
+    setSimulation: (patch) => {
+      const state = get();
+      if (Object.entries(patch).every(([key, value]) => state.scene.simulation[key as keyof Scene['simulation']] === value)) return;
+      pushHistory(state.scene, true);
+      set({ scene: { ...state.scene, simulation: { ...state.scene.simulation, ...patch } } });
+      if (Object.keys(patch).some(key => key !== 'stepsPerFrame' && key !== 'timeScale')) restartRuntime(false);
+    },
     togglePanel: (key) => set((state) => ({ panels: { ...state.panels, [key]: !state.panels[key] } })),
     setRightTab: (rightTab) => set({ rightTab }),
     setLeftTab: (leftTab) => set({ leftTab }),
