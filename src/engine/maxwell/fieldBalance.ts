@@ -14,8 +14,13 @@ export function measureFieldBalance(s: YeeSolver, volume: FieldVolume, advance: 
   for (let a = 0; a < 3; a++) if (!Number.isInteger(low[a]) || !Number.isInteger(high[a]) || low[a] < 1 || high[a] < low[a] || high[a] >= dims[a] - 1) throw new Error('Field-balance volume requires a one-cell grid halo');
   const E = [s.Ex, s.Ey, s.Ez], B = [s.Bx, s.By, s.Bz], eps = [s.epsX, s.epsY, s.epsZ], mu = [s.muX, s.muY, s.muZ], dv = s.dx * s.dy * s.dz;
   const sumVolume = (at: (c: number) => number) => {
-    let total = 0;
-    for (let k = low[2]; k <= high[2]; k++) for (let j = low[1]; j <= high[1]; j++) for (let i = low[0]; i <= high[0]; i++) total += at(s.index(i, j, k));
+    // Small exchanges can sit on a large static magnetic background. A plain
+    // sum makes subtraction of successive volume energies lose many more ulps.
+    let total = 0, compensation = 0;
+    for (let k = low[2]; k <= high[2]; k++) for (let j = low[1]; j <= high[1]; j++) for (let i = low[0]; i <= high[0]; i++) {
+      const value = at(s.index(i, j, k)) - compensation, next = total + value;
+      compensation = (next - total) - value; total = next;
+    }
     return total;
   };
   const energy = () => dv / 2 * sumVolume(c => {

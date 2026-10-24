@@ -26,6 +26,11 @@ import { depositSmoothCharge, depositSmoothTrajectory, smoothTrajectoryWeights, 
 // Particle momentum is staggered at time-dt/2, as in the PIC leapfrog.
 interface BodyState { position: Vec3; rotation: Vec3; velocity: Vec3; angularVelocity: Vec3; momentum: Vec3; }
 interface ConductingLattice { local: Vec3[]; charge: Float64Array; initialCharge: Float64Array; edges: { from: number; to: number; conductance: number }[]; }
+interface ConductorCurrentStep {
+  original: SceneObject;
+  current: number; weights: TrajectoryWeight[]; driveVoltage: number;
+  middle: Vec3; delta: Vec3;
+}
 interface TerminalSource {
   wire: WireObject;
   from: string; to: string;
@@ -597,8 +602,9 @@ export class MaxwellSceneSolver extends MaxwellSampler {
 
   private conductorCurrents() {
     const s = this.core, arrays = [s.Ex, s.Ey, s.Ez], currents = [s.Jx, s.Jy, s.Jz], dv = s.dx * s.dy * s.dz;
+    const steps: ConductorCurrentStep[] = [];
     this.forces.clear();
-    if (!this.lattices.size) return;
+    if (!this.lattices.size) return steps;
     const occupied = this.conductingEdges ??= new Int32Array(3 * s.rho.length), rows = this.dampingRows ??= new Float64Array(3 * s.rho.length);
     occupied.fill(-1); rows.fill(0);
     let bodyIndex = 0;
@@ -651,7 +657,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
           addForce(middle, magnetic);
         }
         const driveVoltage = electricVoltage + motionalVoltage;
-        this.conductorLoss += current * driveVoltage * s.dt;
+        steps.push({ original, current, weights, driveVoltage, middle, delta });
       }
       for (let n = 0; n < lattice.charge.length; n++) lattice.charge[n] += change[n];
       this.forces.set(original.id, { force, torque }); bodyIndex++;
@@ -659,6 +665,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     const limit = this.explicitOhmLimit();
     for (let a = 0; a < 3; a++) for (let c = 0; c < s.rho.length; c++) if (rows[a * s.rho.length + c] * s.dt / EPS0 > limit)
       throw new Error('Moving material deposition became too stiff for the combined wave/current timestep. Reduce CFL, refine the grid or choose a lower conductivity.');
+    return steps;
   }
 
   private transportConductors(before: Map<string, Vec3[]>) {
@@ -719,7 +726,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       const materialBefore = new Map<string, Vec3[]>();
       for (const o of this.scene.objects) { const lattice = this.lattices.get(o.id); if (lattice) { const pose = this.pose(o); materialBefore.set(o.id, lattice.local.map(p => localToWorld(pose, p))); } }
       this.assertFeedSeparation(this.time);
-      this.conductorCurrents();
+      const conductorSteps = this.conductorCurrents();
       const feedSteps = this.feedCurrents();
       this.advanceBodies();
       this.assertMatterInside(this.time + s.dt);
@@ -742,6 +749,14 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       this.waveCurrents();
       s.step();
       const fields = [s.Ex, s.Ey, s.Ez];
+      for (const { original, current, weights, driveVoltage, middle, delta } of conductorSteps) {
+        // Use the accepted current's original path for both endpoints. The
+        // electric part is its exact native E-average work; the moving part
+        // remains an estimate of J.(E+v cross B), not a proper-frame heat proof.
+        const electricVoltage = weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0);
+        const motionalVoltage = this.sampleProjection(middle, 'B', cross(delta, this.velocity(original, middle, this.time)));
+        this.conductorLoss += current * s.dt / 2 * (driveVoltage + electricVoltage + motionalVoltage);
+      }
       for (const { q, weights, voltage } of particleSteps) {
         const work = q / 2 * (voltage + weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0));
         this.sourceParticleWork += work; this.sourceParticleAbsoluteWork += Math.abs(work);

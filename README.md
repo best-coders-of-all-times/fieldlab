@@ -66,6 +66,8 @@ npm run bench:maxwell -- --json artifacts/maxwell-benchmark.json --report docs/m
 ## Validation and remaining work
 
 - [CPU Float32 storage comparison](docs/maxwell-precision-validation.md): optional kernel storage against the Float64 reference. The website still uses Float64; this is not WebGPU parity.
+- [Momentum and surface-stress audit](docs/maxwell-momentum-validation.md): fixed physical control surfaces, initial Coulomb stress, reconstruction sensitivity and remaining spatial error.
+- [Passive-body energy audit](docs/maxwell-passive-energy-validation.md): actual magnetic drag, polarization, signed material work and measured closed-budget limits.
 - [Smooth finite-source model](docs/maxwell-smooth-source-validation.md): analytic density assignment, conserved motion current and compatible electric force gathering, including support and self-force limits.
 - [Coupled source audit](docs/maxwell-coupling-validation.md): legacy force-driven point/sphere coupling fails energy acceptance; selected smooth-cloud cases now show energy refinement, with mesh self-force and incomplete momentum acceptance recorded. Data exposes particle kinetic energy, deposited-current work and their mismatch; these diagnostics do not correct the coupling.
 - [Numerical core validation](docs/maxwell-core-validation.md): specified Fresnel amplitudes, stationary cavity frequency, finite-conductivity attenuation/loss and selected normal/oblique CPML pulses, with refinement and exclusions.

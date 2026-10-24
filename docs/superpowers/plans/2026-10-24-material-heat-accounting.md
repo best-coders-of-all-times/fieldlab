@@ -1,0 +1,12 @@
+# Time-centered conducting-material heat accounting
+
+Continuation of approved M3/M5/M6 work on losses and field/mechanical energy budgets. Baseline 034b8b8 has an explicit graph Ohm current, but reports its heat using only the old-time electric and motional voltage. Actual neutral-body drag audits show a leading first-order matter-energy residual: at fixed mesh32 and final time1ns, 0.693%, 0.337%, 0.161%, 0.0740%, 0.0305% as dt is halved. This is not evidence that the force model has passed all acceptance checks.
+
+Ruling: integrate the work of the accepted conducting current against the time-average electric/motional drive at its actual deposited path. Do not change currents, forces, field stepping or mechanical states to fit a budget; do not define heat by subtracting mechanical kinetic energy. The stationary-body electric part must exactly match actual deposited-current work. Moving-body heat remains a constitutive/work estimate until its separate mechanical and frame accounting is validated.
+
+1. Write a failing stationary-body regression using a compact discrete-curl initial E field, no impressed sources, no motion. Compare independently measured native all-current work with conductor heat. Ensure exact Gauss-compatible initial E, nonzero dissipation, finite-volume flux accounted, and replay where applicable.
+2. Retain each accepted graph edge current, its actual native deposition weights, old electric plus motional drive and old path midpoint/delta for the duration of one step. After Maxwell evolution, evaluate the new electric voltage on the identical weights and the new motional voltage at the old deposited path using the new synchronized B and material velocity. Add I*dt*(driveOld+driveNew)/2. No clipping to positive heat and no algebraic energy correction.
+3. Reproduce stationary heat equality, existing moving fields/material/terminal regressions and actual neutral-body drag refinement. Record whether the moving residual improves or retains a spatial/constitutive floor; do not claim general closure from a single case.
+4. Promote reproducible passive audit and measured limitations, review, build, appropriate unit/browser checks, and Git checkpoint. General momentum/torque and moving-material release conditions remain open.
+
+Interfaces: sceneSolver.conductorCurrents -> per-step records -> step after core.step. Record lifetime is one field step. Existing snapshot/reset clears the cumulative heat and needs no persistent auxiliary state. Keep the browser's Float64 core and all saved model definitions unchanged.

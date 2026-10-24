@@ -502,7 +502,7 @@ function SourceProfile({ obj, patch, fullMaxwell }: {
       <div className="note">Separable compact cubic B-spline density with support center ±2 widths on each lab axis. Rotation does not rotate the density; no Lorentz contraction is applied. The full support must remain inside the physical domain, with one extra grid cell before a PEC wall. Coarse clouds can experience artificial mesh self-force. Resolve the width with multiple cells and check spatial and time convergence.</div>
       {!fullMaxwell && <div className="note warn" role="alert">Smooth source profile is inactive in approximation mode. {obj.kind === 'charge' ? 'The charge uses the analytic point-charge field.' : 'This particle remains a test particle and does not source the fields.'} Profile and width remain saved for Maxwell mode.</div>}
     </>}
-    {fullMaxwell && <div className="note">{smooth ? '' : 'Legacy CIC has a grid-dependent effective source size. '}Force-driven coupling is experimental; coupled energy conservation has not been validated.</div>}
+    {fullMaxwell && <div className="note">{smooth ? 'Force-driven coupling is experimental. Selected smooth-cloud energy tests converge; mesh self-force and full momentum and material budgets remain under validation.' : 'Legacy CIC has a grid-dependent source size and large force/work mismatches in tested force-driven cases. A resolved finite smooth cloud improves selected energy tests; refine its width, grid and timestep before quantitative use.'}</div>}
   </>;
 }
 
@@ -926,7 +926,7 @@ function MeasurePanel() {
           ['gaussRelative', 'Relative Gauss residual'], ['divergenceE', 'Absolute electric Gauss residual'],
           ['divergenceB', 'Magnetic divergence residual'], ['charge', 'Total charge (C)'],
           ['totalEnergy', 'Field and carrier energy estimate (J)'], ['ohmicLoss', 'Stationary material loss (J)'],
-          ['sourceWork', 'Applied-current work (J)'], ['conductorLoss', 'Body heat estimate (J)'],
+          ['sourceWork', 'Applied-current work (J)'], ['conductorLoss', 'Body rest-frame work estimate (J)'],
           ['mechanicalWork', 'Rigid linear work, partial (J)'],
           ...(scene.objects.some(o => o.visible && o.kind === 'wire' && o.electricalModel === 'currentFeed') ? [
             ['feedSourceWork', 'External terminal-source work (J)'], ['feedTransferredCharge', 'Terminal transferred charge (C)'],
@@ -941,7 +941,8 @@ function MeasurePanel() {
         ].map(([key, label]) => <div className="stat-line" key={key}><span>{label}</span><b>{measurements.extra?.[key] !== undefined ? formatSci(measurements.extra[key], 4) : '—'}</b></div>)}
         {(measurements.extra?.sourceParticleCouplingRelative ?? 0) > 0.01 && <div className="note warn" role="alert">Measured particle field-work/kinetic mismatch exceeds 1% of transferred energy. This run does not validate coupled energy conservation. Check source shape and spatial/time convergence; force-driven point-charge coupling remains experimental.</div>}
         {(measurements.extra?.sourceParticleCount ?? 0) > 0 && <div className="note">Particle work uses time-centered E and the actual conserved deposited current. Kinetic energy estimates integer-time momentum with a half kick. Their difference measures coupling error; it does not include the general mechanical, momentum or external-drive ledger.</div>}
-        <div className="note">Relative Gauss residual uses the current charge and D/Δx scales. Applied-current work includes deposited conduction and bound currents as well as impressed sources. Stationary material loss, body heat and partial rigid linear work are separate diagnostics; they are not a closed energy/momentum ledger. Check resolution, domain, boundaries and initialization.</div>
+        {scene.objects.some(o => o.visible && (o.kind === 'conductor' || ((o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil') && o.electricalModel === 'conducting'))) && <div className="note">Body rest-frame work averages the accepted conducting current against electric and motional drive. It is a signed estimate: under-resolved explicit-current steps can give negative increments. It is not guaranteed positive Joule heat. Refine source bandwidth, grid and timestep.</div>}
+        <div className="note">Relative Gauss residual uses the current charge and D/Δx scales. Applied-current work includes deposited conduction and bound currents as well as impressed sources. Stationary material loss, body rest-frame work and partial rigid linear work are separate diagnostics; they are not a closed energy/momentum ledger. Check resolution, domain, boundaries and initialization.</div>
       </PanelSection>}
 
       {inductionTelemetry.length > 0 && (

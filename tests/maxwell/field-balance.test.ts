@@ -29,3 +29,15 @@ it('closes the field budget around a moving material scene, including source and
   expect(balance.relativeResidual).toBeLessThan(1e-10);
   expect(solver.diagnostics().gaussRelative).toBeLessThan(1e-8);
 });
+
+it('resolves small work and flux changes against a large uniform magnetic background', () => {
+  const s = new YeeSolver({ nx: 32, ny: 32, nz: 32, dx: 1 / 32, dy: 1 / 32, dz: 1 / 32, cfl: 0.6, boundary: { x: 'periodic', y: 'periodic', z: 'periodic' } });
+  s.Bz.fill(0.001); s.sigmaX.fill(0.002);
+  for (let k = 0; k < s.nz; k++) for (let j = 0; j < s.ny; j++) for (let i = 0; i < s.nx; i++) s.Ex[s.index(i, j, k)] = 25 * Math.sin(2 * Math.PI * j / s.ny);
+  for (let step = 0; step < 4; step++) {
+    const balance = measureFieldBalance(s, { low: [2, 2, 2], high: [29, 29, 29] }, () => s.step());
+    expect(Math.abs(balance.matterWork)).toBeGreaterThan(1e-12);
+    expect(Math.abs(balance.change) / balance.before).toBeLessThan(1e-3);
+    expect(Math.abs(balance.residual) / balance.before).toBeLessThan(2e-15);
+  }
+});

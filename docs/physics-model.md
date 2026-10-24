@@ -135,3 +135,12 @@ Poisson and both FDTD paths already run in local browser Web Workers. Legacy app
 That selected charge benchmark's normalized Gauss residual is below `3e-15`. These errors apply to its history, finite-grid shape, point, time and boundary setup away from the source. They are not universal sub-percent claims. Abrupt starts produced unresolved ringing and are not interchangeable with this ramped benchmark.
 
 Replay/browser tests check authored-data preservation, worker generations, frame/probe/pose timing, explicit conductor setup and readouts. They do not establish physical correctness merely from finite fields or visible B. Moving PEC/mirror validation, general moving media, explicit voltage feeds, quantitative passive-circuit feedback, a closed energy/momentum ledger and CPU/WebGPU parity remain outstanding plan requirements.
+
+
+### Conducting-body work and passive feedback audit
+
+The body rest-frame work estimate accumulates accepted graph current against the time-average electric plus motional voltage on its actual deposited path. The electric term is the native E-average work of that current. The moving term uses synchronized B and material velocity at the old deposited path. It is not calculated by subtracting kinetic energy, and it does not adjust fields, forces or mechanics. Snapshot/reset clears the cumulative work.
+
+For a fixed body, independent finite-volume current work now agrees with this signed estimate to roundoff. This does not make the explicit old-field current unconditionally passive: an under-resolved high-frequency step can have negative E-average work. Tests retain that signed result without clipping; the UI therefore labels work rather than guaranteed positive Joule heat. An implicit, passive constitutive discretization remains further work.
+
+The [passive conductor audit](maxwell-passive-energy-validation.md) includes actual rigid kinetic energy, material work and measured field boundary flux. Its selected 32-cell magnetic-drag case improves from 0.693% mismatch to 0.0134% after correcting time integration, while a smaller moving-coupling error remains. The [momentum audit](maxwell-momentum-validation.md) includes initial Coulomb surface stress and a fixed physical control volume; selected smooth-source residuals improve spatially but retain mesh and reconstruction sensitivity. These reports do not accept general moving materials, torque or the full M6 release.
