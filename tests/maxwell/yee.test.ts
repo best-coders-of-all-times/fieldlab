@@ -135,5 +135,27 @@ describe('SI Yee Maxwell reference kernel', () => {
     expect(Array.from(s.Ey)).toEqual(end);
     expect(MU_0 * EPSILON_0 * LIGHT_SPEED ** 2).toBeCloseTo(1, 12);
   });
+
+  it('preserves a captured static gradient through CPML without spurious magnetic fields', () => {
+    const n = 14;
+    const s = new YeeSolver({ nx: n, ny: n, nz: n, dx: 0.02, dy: 0.02, dz: 0.02,
+      boundary: { x: 'pml', y: 'pml', z: 'pml' }, pmlCells: 3 });
+    const phi = new Float64Array(n ** 3);
+    for (let z = 0; z < n; z++) for (let y = 0; y < n; y++) for (let x = 0; x < n; x++)
+      phi[s.index(x, y, z)] = Math.sin(Math.PI * x / n) * Math.sin(Math.PI * y / n) * Math.sin(Math.PI * z / n) + 0.25 * Math.cos(2 * Math.PI * y / n);
+    for (let z = 0; z < n; z++) for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const i = s.index(x, y, z);
+      s.Ex[i] = (phi[i] - phi[s.index((x + 1) % n, y, z)]) / s.dx;
+      s.Ey[i] = (phi[i] - phi[s.index(x, (y + 1) % n, z)]) / s.dy;
+      s.Ez[i] = (phi[i] - phi[s.index(x, y, (z + 1) % n)]) / s.dz;
+    }
+    s.setChargeFromElectricField(); s.captureStaticBackground();
+    const initial = s.snapshot();
+    s.step(120);
+    expect(Math.max(...s.Bx.map(Math.abs), ...s.By.map(Math.abs), ...s.Bz.map(Math.abs))).toBeLessThan(1e-20);
+    expect(Math.max(...s.Ex.map((v, i) => Math.abs(v - initial.Ex[i])))).toBeLessThan(1e-10);
+    const evolved = s.snapshot(); s.restore(initial); s.step(120);
+    expect(Array.from(s.Ex)).toEqual(Array.from(evolved.Ex));
+  });
 });
 

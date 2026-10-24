@@ -1,11 +1,13 @@
 /** Convolutional stretched-coordinate PML. Each curl derivative owns its history. */
 export class Cpml {
   readonly memories: Float64Array[];
+  readonly reference: Float64Array[];
   private readonly coefficients: { a: Float64Array; b: Float64Array; k: Float64Array }[][];
 
   constructor(private readonly shape: number[], spacing: number[], boundaries: string[], cells: number, dt: number, speed: number) {
     const size = shape[0] * shape[1] * shape[2];
     this.memories = Array.from({ length: 12 }, () => new Float64Array(size));
+    this.reference = Array.from({ length: 12 }, () => new Float64Array(size));
     this.coefficients = shape.map((n, axis) => [0, 0.5].map(offset => {
       const a = new Float64Array(n), b = new Float64Array(n), k = new Float64Array(n).fill(1);
       if (boundaries[axis] !== 'pml') return { a, b, k };
@@ -26,14 +28,16 @@ export class Cpml {
   derivative(slot: number, axis: number, coordinate: number, index: number, forward: boolean, derivative: number): number {
     const c = this.coefficients[axis][forward ? 1 : 0];
     const memory = this.memories[slot];
-    memory[index] = c.b[coordinate] * memory[index] + c.a[coordinate] * derivative;
-    return derivative / c.k[coordinate] + memory[index];
+    const background = this.reference[slot][index], perturbation = derivative - background;
+    memory[index] = c.b[coordinate] * memory[index] + c.a[coordinate] * perturbation;
+    return background + perturbation / c.k[coordinate] + memory[index];
   }
 
   previewDerivative(slot: number, axis: number, coordinate: number, index: number, forward: boolean, derivative: number): number {
     const c = this.coefficients[axis][forward ? 1 : 0];
-    return derivative / c.k[coordinate] + c.b[coordinate] * this.memories[slot][index] + c.a[coordinate] * derivative;
+    const background = this.reference[slot][index], perturbation = derivative - background;
+    return background + perturbation / c.k[coordinate] + c.b[coordinate] * this.memories[slot][index] + c.a[coordinate] * perturbation;
   }
 
-  reset() { for (const memory of this.memories) memory.fill(0); }
+  reset() { for (const memory of [...this.memories, ...this.reference]) memory.fill(0); }
 }

@@ -13,7 +13,7 @@ const materialNames = ['epsX', 'epsY', 'epsZ', 'muX', 'muY', 'muZ', 'sigmaX', 's
 type FieldName = typeof fieldNames[number];
 type MaterialName = typeof materialNames[number];
 export type YeeSnapshot = Record<FieldName | MaterialName, Float64Array> & {
-  time: number; steps: number; ohmicLoss: number; sourceWork: number; cpml: Float64Array[];
+  time: number; steps: number; ohmicLoss: number; sourceWork: number; cpml: Float64Array[]; cpmlReference: Float64Array[]; boundaryE: Float64Array[];
 };
 export interface YeeDiagnostics {
   divergenceE: number; divergenceB: number; charge: number; electricEnergy: number;
@@ -39,6 +39,8 @@ export class YeeSolver {
   private readonly pmlCells: number; private readonly pml: Cpml | null;
   private readonly previous: Int32Array[]; private readonly next: Int32Array[];
   private readonly conduction: Float64Array[];
+  private readonly boundaryIndices: Int32Array[];
+  private readonly boundaryE: Float64Array[];
 
   constructor(o: YeeOptions) {
     this.shape = [o.nx, o.ny, o.nz]; this.spacing = [o.dx, o.dy, o.dz];
@@ -70,6 +72,13 @@ export class YeeSolver {
     this.pmlCells = o.pmlCells ?? 8;
     for (let a = 0; a < 3; a++) if (this.boundaries[a] === 'pml' && (this.pmlCells < 2 || 2 * this.pmlCells >= this.shape[a])) throw new Error('PML requires at least two cells and a nonempty physical interior');
     this.pml = this.boundaries.includes('pml') ? new Cpml(this.shape, this.spacing, this.boundaries, this.pmlCells, this.dt, LIGHT_SPEED) : null;
+    const pinned: number[][] = [[], [], []];
+    for (let z = 0; z < this.nz; z++) for (let y = 0; y < this.ny; y++) for (let x = 0; x < this.nx; x++) {
+      const pos = [x, y, z], index = this.index(x, y, z);
+      for (let component = 0; component < 3; component++) if (pos.some((v, axis) => axis !== component && this.boundaries[axis] !== 'periodic' && v === 0)) pinned[component].push(index);
+    }
+    this.boundaryIndices = pinned.map(indices => Int32Array.from(indices));
+    this.boundaryE = pinned.map(indices => new Float64Array(indices.length));
     this.validateMaterials();
   }
 
@@ -86,10 +95,7 @@ export class YeeSolver {
 
   private enforceBoundary() {
     const E = [this.Ex, this.Ey, this.Ez];
-    for (let z = 0; z < this.nz; z++) for (let y = 0; y < this.ny; y++) for (let x = 0; x < this.nx; x++) {
-      const p = [x, y, z], i = this.index(x, y, z);
-      for (let a = 0; a < 3; a++) if (this.boundaries[a] !== 'periodic' && p[a] === 0) for (let c = 0; c < 3; c++) if (c !== a) E[c][i] = 0;
-    }
+    for (let c = 0; c < 3; c++) for (let j = 0; j < this.boundaryIndices[c].length; j++) E[c][this.boundaryIndices[c][j]] = this.boundaryE[c][j];
   }
 
   step(count = 1) {
@@ -141,6 +147,36 @@ export class YeeSolver {
 
   /** Explicit initialization utility; never called by step(). */
   setChargeFromElectricField() { for (let i = 0; i < this.rho.length; i++) this.rho[i] = this.divD(i); }
+
+  /** Capture an independently initialized static solution. CPML absorbs its
+   * perturbations; it must not stretch a DC gradient into a nonzero curl.
+   * This only changes the boundary derivative decomposition, never the fields,
+   * charge, source currents, or physical-interior Maxwell evolution.
+   * Call once after static initialization and before saving the initial snapshot.
+   */
+  captureStaticBackground() {
+    if (!this.pml) return;
+    if (this.steps !== 0) throw new Error('Capture static background before time stepping');
+    const E = [this.Ex, this.Ey, this.Ez], B = [this.Bx, this.By, this.Bz], mu = [this.muX, this.muY, this.muZ];
+    // The outer wall holds the prepared static boundary values while its
+    // perturbations obey PEC. A varying static Dirichlet potential is allowed.
+    // Bare PEC axes retain their physical zero tangential E condition.
+    for (let c = 0; c < 3; c++) for (let j = 0; j < this.boundaryIndices[c].length; j++) {
+      const i = this.boundaryIndices[c][j];
+      const pos = [i % this.nx, Math.floor(i / this.nx) % this.ny, Math.floor(i / (this.nx * this.ny))];
+      const barePec = pos.some((v, a) => a !== c && v === 0 && this.boundaries[a] === 'pec');
+      this.boundaryE[c][j] = barePec ? 0 : E[c][i];
+    }
+    this.enforceBoundary();
+    for (let i = 0; i < this.rho.length; i++) for (let c = 0; c < 3; c++) {
+      const a = (c + 1) % 3, b = (c + 2) % 3, ia = this.previous[a][i], ib = this.previous[b][i];
+      this.pml.reference[c * 2][i] = (E[b][this.next[a][i]] - E[b][i]) / this.spacing[a];
+      this.pml.reference[c * 2 + 1][i] = (E[a][this.next[b][i]] - E[a][i]) / this.spacing[b];
+      this.pml.reference[6 + c * 2][i] = (B[b][i] / mu[b][i] - B[b][ia] / mu[b][ia]) / (MU_0 * this.spacing[a]);
+      this.pml.reference[7 + c * 2][i] = (B[a][i] / mu[a][i] - B[a][ib] / mu[a][ib]) / (MU_0 * this.spacing[b]);
+    }
+    for (const memory of this.pml.memories) memory.fill(0);
+  }
 
   /** Time-centered B at its native face. Spatial interpolation is a caller responsibility. */
   synchronizedB(component: 0 | 1 | 2, i: number): number {
@@ -209,7 +245,9 @@ export class YeeSolver {
   }
 
   snapshot(): YeeSnapshot {
-    const result = { time: this.time, steps: this.steps, ohmicLoss: this.ohmicLoss, sourceWork: this.sourceWork, cpml: this.pml?.memories.map(a => a.slice()) ?? [] } as YeeSnapshot;
+    const result = { time: this.time, steps: this.steps, ohmicLoss: this.ohmicLoss, sourceWork: this.sourceWork,
+      cpml: this.pml?.memories.map(a => a.slice()) ?? [], cpmlReference: this.pml?.reference.map(a => a.slice()) ?? [] } as YeeSnapshot;
+    result.boundaryE = this.boundaryE.map(a => a.slice());
     for (const name of [...fieldNames, ...materialNames]) result[name] = this[name].slice();
     return result;
   }
@@ -218,12 +256,16 @@ export class YeeSolver {
     for (const name of [...fieldNames, ...materialNames]) { if (state[name].length !== this.rho.length) throw new Error('Snapshot grid mismatch'); this[name].set(state[name]); }
     if (state.cpml.length !== (this.pml?.memories.length ?? 0)) throw new Error('Snapshot boundary mismatch');
     this.pml?.memories.forEach((a, i) => a.set(state.cpml[i]));
+    if (state.cpmlReference.length !== (this.pml?.reference.length ?? 0)) throw new Error('Snapshot boundary reference mismatch');
+    this.pml?.reference.forEach((a, i) => a.set(state.cpmlReference[i]));
+    this.boundaryE.forEach((a, i) => { if (a.length !== state.boundaryE[i]?.length) throw new Error('Snapshot boundary edge mismatch'); a.set(state.boundaryE[i]); });
     this.time = state.time; this.steps = state.steps; this.ohmicLoss = state.ohmicLoss; this.sourceWork = state.sourceWork;
   }
 
   reset() {
     for (const name of fieldNames) this[name].fill(0);
     this.pml?.reset(); this.conduction.forEach(a => a.fill(0));
+    this.boundaryE.forEach(a => a.fill(0));
     this.time = 0; this.steps = 0; this.ohmicLoss = 0; this.sourceWork = 0;
   }
 }
