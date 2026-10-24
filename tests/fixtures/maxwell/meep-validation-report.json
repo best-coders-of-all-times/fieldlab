@@ -1,0 +1,59 @@
+{
+  "meepVersion": "1.35.0",
+  "fixture": "tests/fixtures/maxwell/meep-periodic.json",
+  "kernelRmsTolerance": 1e-10,
+  "results": [
+    {
+      "name": "periodic-vacuum",
+      "resolution": 32,
+      "epsilon": 1,
+      "finalTime": 0.25,
+      "maximumKernelError": 1.867292314397761e-16,
+      "continuumError": 0.001121829981138139
+    },
+    {
+      "name": "periodic-vacuum",
+      "resolution": 64,
+      "epsilon": 1,
+      "finalTime": 0.25,
+      "maximumKernelError": 1.9426082416560804e-16,
+      "continuumError": 0.0002804356292380046,
+      "refinementRatio": 4.000311886853886
+    },
+    {
+      "name": "periodic-vacuum",
+      "resolution": 128,
+      "epsilon": 1,
+      "finalTime": 0.25,
+      "maximumKernelError": 2.5079543800436038e-16,
+      "continuumError": 0.00007010753546528259,
+      "refinementRatio": 4.000078270856875
+    },
+    {
+      "name": "periodic-dielectric",
+      "resolution": 32,
+      "epsilon": 4,
+      "finalTime": 0.25,
+      "maximumKernelError": 1.0841209962744704e-16,
+      "continuumError": 0.0006704976938022726
+    },
+    {
+      "name": "periodic-dielectric",
+      "resolution": 64,
+      "epsilon": 4,
+      "finalTime": 0.25,
+      "maximumKernelError": 1.5296294779738132e-16,
+      "continuumError": 0.00016770654289090053,
+      "refinementRatio": 3.998041353928909
+    },
+    {
+      "name": "periodic-dielectric",
+      "resolution": 128,
+      "epsilon": 4,
+      "finalTime": 0.25,
+      "maximumKernelError": 2.4407758115111146e-16,
+      "continuumError": 0.000041931769715114775,
+      "refinementRatio": 3.999510252734428
+    }
+  ]
+}
