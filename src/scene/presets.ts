@@ -344,6 +344,7 @@ export const PRESETS: Preset[] = [
       ];
       setDisplay(s, {
         fieldLines: 'E',
+        conductorOpacity: 0.15,
         lineCount: 70,
         slices: { xy: true, xz: false, yz: false },
         sliceQuantity: 'Emag',
@@ -644,7 +645,7 @@ export const PRESETS: Preset[] = [
     title: 'Magnet through a loop',
     group: 'Induction',
     subtitle: 'Faraday’s law, Lenz’s law',
-    description: 'A bar magnet oscillates through a pickup loop. The flux through the loop changes sign as the magnet passes, driving an EMF ε = −dΦ/dt.',
+    description: 'A bar magnet oscillates through a pickup loop. The flux through the loop changes as the magnet passes, driving an EMF ε = −dΦ/dt.',
     tags: ['induction', 'Faraday', 'flux', 'EMF', 'Lenz'],
     create: () => {
       const s = fieldsScene('Magnet through a loop', 'Faraday induction', 'A moving magnet drives a changing flux through a pickup loop.');
@@ -658,9 +659,11 @@ export const PRESETS: Preset[] = [
       loop.wireRadius = 0.01;
       s.objects = [magnet, loop];
       setDisplay(s, {
-        fieldLines: 'none',
+        fieldLines: 'B',
+        lineCount: 20,
         slices: { xy: false, xz: false, yz: false },
-        arrows: 'none',
+        arrows: 'B',
+        arrowDensity: 6,
         showBoundCurrent: true,
       });
       s.theory = {

@@ -17,6 +17,7 @@ import {
   makePointSource,
   makeProbe,
   makeWire,
+  makeScene,
 } from '../scene/defaults';
 
 const KIND_ICON: Record<string, string> = {
@@ -105,6 +106,15 @@ export function LeftPanel() {
       <div className="left-body">
         {leftTab === 'scenes' ? (
           <>
+            <button className="preset-card custom-scene" onClick={() => {
+              const blank = makeScene({ name: 'Custom scene', subtitle: 'Wires, sources and prescribed motion', tags: ['custom'] });
+              blank.simulation.staticBoundary = 'open';
+              useAppStore.getState().setScene(blank, { presetId: null });
+              useAppStore.setState({ selectedId: null, playing: false, time: 0, leftTab: 'add', rightTab: 'inspector', chart: { series: [], points: [] } });
+            }}>
+              <div className="preset-title"><span>+ New custom scene</span></div>
+              <div className="preset-sub">Build wire curves and timed motion</div>
+            </button>
             <div className="search-box">
               <Icon name="search" size={14} />
               <input
@@ -142,7 +152,7 @@ export function LeftPanel() {
           <>
             <div className="group-label">Sources & matter</div>
             <div className="add-grid">
-              {addItems.map((item) => (
+              {addItems.filter(item => scene.mode !== 'waves' || ['Conductor', 'Dielectric', 'Probe'].includes(item.label)).map((item) => (
                 <button key={item.label} type="button" className="add-btn" onClick={() => add(item.make())}>
                   <Icon name={item.icon} size={18} />
                   <span className="add-title">{item.label}</span>

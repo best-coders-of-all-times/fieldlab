@@ -3,6 +3,7 @@ import { useAppStore } from '../app/store';
 import { Icon } from './Icon';
 import { formatSci } from '../engine/units';
 import { HelpModal } from './HelpModal';
+import { restoreScene } from '../app/restoreScene';
 
 export function TopBar() {
   const scene = useAppStore((s) => s.scene);
@@ -12,7 +13,6 @@ export function TopBar() {
   const status = useAppStore((s) => s.status);
   const panels = useAppStore((s) => s.panels);
   const setPlaying = useAppStore((s) => s.setPlaying);
-  const setMode = useAppStore((s) => s.setMode);
   const resetScene = useAppStore((s) => s.resetScene);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
@@ -47,7 +47,9 @@ export function TopBar() {
       if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.objects)) {
         throw new Error('Not a FieldLab scene file.');
       }
-      useAppStore.getState().setScene(parsed, { presetId: null, history: true });
+      const restored = restoreScene(parsed, useAppStore.getState().scene);
+      if (!restored) throw new Error('Invalid scene settings.');
+      useAppStore.getState().setScene(restored, { presetId: null, history: true });
     } catch (err) {
       useAppStore.getState().setError(err instanceof Error ? err.message : String(err));
     }
@@ -72,23 +74,6 @@ export function TopBar() {
             <span className="brand-name">FieldLab</span>
             <span className="brand-sub">Electromagnetism sandbox</span>
           </div>
-        </div>
-
-        <div className="mode-switch" role="tablist" aria-label="Simulation mode">
-          <button
-            className={scene.mode === 'fields' ? 'active' : ''}
-            onClick={() => setMode('fields')}
-            title="Electrostatics, magnetostatics and particle dynamics"
-          >
-            <Icon name="charge" size={14} /> Fields
-          </button>
-          <button
-            className={scene.mode === 'waves' ? 'active magnetic' : ''}
-            onClick={() => setMode('waves')}
-            title="Time-domain Maxwell / FDTD waves"
-          >
-            <Icon name="wave" size={14} /> Waves
-          </button>
         </div>
 
         <div className="transport">

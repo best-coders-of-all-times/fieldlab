@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { InductionSystem } from '../src/engine/induction/system';
 import { getPreset } from '../src/scene/presets';
+import { makeScene, makeWire } from '../src/scene/defaults';
 
 function run(id: string, seconds: number) {
   const scene = getPreset(id)!.create();
@@ -16,6 +17,18 @@ function run(id: string, seconds: number) {
 }
 
 describe('Induction demos', () => {
+  it('integrates the closing wire edge so uniform translation gives no net closed-loop EMF', () => {
+    const wire = makeWire([[0, 0, 0], [0.1, 0, 0], [0.1, 0.1, 0], [0, 0.1, 0]], 0);
+    wire.closed = true;
+    wire.motion = { kind: 'keyframes', loop: false, keyframes: [
+      { time: 0, position: [0, 0, 0], rotation: [0, 0, 0] },
+      { time: 1, position: [0.1, 0, 0], rotation: [0, 0, 0] },
+    ] };
+    const scene = makeScene({ name: 'translated closed wire', objects: [wire] });
+    scene.simulation.externalB = [0, 0, 1];
+    const frame = new InductionSystem(scene).advance(0.05)!;
+    expect(frame.readings[0].emf).toBeCloseTo(0, 10);
+  });
   it('moves the magnet and drives a changing flux', () => {
     const { frames } = run('magnet-loop', 3.5);
     const fluxes = frames.map((f) => f.readings[0].flux);

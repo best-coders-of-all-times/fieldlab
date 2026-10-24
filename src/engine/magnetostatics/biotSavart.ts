@@ -1,3 +1,4 @@
+import { wirePath } from '../../scene/wirePath';
 import { MU0 } from '../constants';
 import type { Vec3 } from '../math/vec3';
 import { localToWorld, worldAxis } from '../../scene/defaults';
@@ -16,6 +17,7 @@ export interface SegmentSet {
   currents: Float32Array;
   count: number;
   softening: number;
+  softenings?: Float32Array; // each source retains its own filament radius
 }
 
 export interface MagnetSurfaceCurrent {
@@ -57,7 +59,7 @@ function pushSegment(
 
 function wireSegments(obj: WireObject, data: number[], currents: number[], maxLength: number): void {
   if (obj.points.length < 2) return;
-  const pts = obj.points.map((p) => localToWorld(obj, p));
+  const pts = wirePath(obj).map((p) => localToWorld(obj, p));
   for (let i = 0; i < pts.length - 1; i++) {
     pushSegment(data, currents, pts[i], pts[i + 1], obj.current, maxLength);
   }
@@ -124,11 +126,13 @@ export function buildMagnetostaticSources(objects: SceneObject[]): Magnetostatic
   const data: number[] = [];
   const currents: number[] = [];
   const magnets: MagnetSurfaceCurrent[] = [];
+  const softenings: number[] = [];
   const maxLength = 0.03;
   let softening = 0.006;
 
   for (const obj of objects) {
     if (!obj.visible) continue;
+    softening = 0.006;
     if (isWire(obj)) {
       wireSegments(obj, data, currents, maxLength);
       softening = Math.max(0.001, obj.wireRadius * 1.2);
@@ -146,6 +150,7 @@ export function buildMagnetostaticSources(objects: SceneObject[]): Magnetostatic
         axis: worldAxis(obj, [0, 0, 1]),
       });
     }
+    while (softenings.length < currents.length) softenings.push(softening);
   }
 
   return {
@@ -154,6 +159,7 @@ export function buildMagnetostaticSources(objects: SceneObject[]): Magnetostatic
       currents: new Float32Array(currents),
       count: currents.length,
       softening,
+      softenings: new Float32Array(softenings),
     },
     magnets,
     inductance: estimateInductance(objects),
@@ -164,14 +170,15 @@ export function buildMagnetostaticSources(objects: SceneObject[]): Magnetostatic
 export function sampleBAt(
   set: SegmentSet,
   p: Vec3,
-  soft = set.softening,
+  soft?: number,
   out: Vec3 = [0, 0, 0],
 ): Vec3 {
   let bx = 0, by = 0, bz = 0;
-  const s2 = soft * soft;
   const k = MU0 / (4 * Math.PI);
   const segs = set.segs;
   for (let i = 0, o = 0; i < set.count; i++, o += 6) {
+    const radius = soft ?? set.softenings?.[i] ?? set.softening;
+    const s2 = radius * radius;
     const ax = segs[o], ay = segs[o + 1], az = segs[o + 2];
     const bxs = segs[o + 3], bys = segs[o + 4], bzs = segs[o + 5];
     const dlx = bxs - ax, dly = bys - ay, dlz = bzs - az;

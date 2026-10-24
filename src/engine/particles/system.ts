@@ -67,7 +67,7 @@ export class ParticleSystem {
       scene.domain.size[2] / 2,
     ];
     for (const obj of scene.objects) {
-      if (!isParticle(obj) || !obj.visible) continue;
+      if (!isParticle(obj) || !obj.visible || obj.motion) continue;
       this.states.push(this.makeState(obj));
     }
   }

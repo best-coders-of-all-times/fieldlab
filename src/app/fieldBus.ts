@@ -2,6 +2,7 @@ import type { FdtdFrame } from '../workers/protocol';
 import type { FieldLineData, SliceData } from '../engine/staticsEngine';
 import type { ParticleFrame } from '../engine/particles/system';
 import type { InductionFrame } from '../engine/induction/system';
+import type { ProbeReading } from '../scene/types';
 
 export interface StaticsLinesPayload {
   field: 'E' | 'B';
@@ -16,6 +17,7 @@ export interface LatticePayload {
 }
 
 interface Events {
+  'probes': ProbeReading[];
   'statics-slice': SliceData;
   'statics-lines': StaticsLinesPayload;
   'statics-lattice': LatticePayload;

@@ -154,9 +154,9 @@ export function gradientToE(phi: Float32Array, g: GridSpec): Float32Array {
         const km = idx(g, i, j, Math.max(k - 1, 0));
         const kp = idx(g, i, j, Math.min(k + 1, g.nz - 1));
         const o = c * 3;
-        out[o] = -(phi[ip] - phi[im]) * inv2dx;
-        out[o + 1] = -(phi[jp] - phi[jm]) * inv2dy;
-        out[o + 2] = -(phi[kp] - phi[km]) * inv2dz;
+        out[o] = -(phi[ip] - phi[im]) * inv2dx * (i === 0 || i === g.nx - 1 ? 2 : 1);
+        out[o + 1] = -(phi[jp] - phi[jm]) * inv2dy * (j === 0 || j === g.ny - 1 ? 2 : 1);
+        out[o + 2] = -(phi[kp] - phi[km]) * inv2dz * (k === 0 || k === g.nz - 1 ? 2 : 1);
       }
     }
   }

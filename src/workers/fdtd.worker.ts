@@ -84,6 +84,7 @@ function buildFrame(): FdtdFrame {
   }
   const probes = sc.objects
     .filter(isProbe)
+    .filter(p => p.visible)
     .map((p) => ({ id: p.id, position: p.position, sample: s.sample(p.position) }));
   return {
     type: 'frame',
@@ -105,6 +106,7 @@ function init(msg: Extract<FdtdRequest, { type: 'init' }>): void {
   scheduled = false;
   solver = new FdtdSolver(msg.scene);
   post({ type: 'ready', generation, meta: solver.meta });
+  post(buildFrame());
 }
 
 ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
@@ -118,6 +120,7 @@ ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
     if ('generation' in msg && msg.generation !== generation) return;
     if (msg.type === 'config') {
       scene = msg.scene;
+      if (!running) post(buildFrame());
       return;
     }
     if (msg.type === 'start') {

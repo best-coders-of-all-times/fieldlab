@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import type { Scene, SceneObject, SliceQuantity } from '../scene/types';
+import type { Scene, SceneObject, SliceQuantity, ProbeReading } from '../scene/types';
+import { formatPrefixed } from '../engine/units';
 import { isParticle } from '../scene/types';
 import { fieldBus } from '../app/fieldBus';
 import type { FdtdFrame } from '../workers/protocol';
@@ -9,7 +10,7 @@ import type { ParticleFrame } from '../engine/particles/system';
 import type { InductionFrame } from '../engine/induction/system';
 import { ParticleTrailLayer } from './trailLayer';
 import type { SliceData } from '../engine/staticsEngine';
-import { createObjectView, disposeObjectView, type ObjectView } from './objectFactory';
+import { createObjectView, disposeObjectView, objectSignature, type ObjectView } from './objectFactory';
 import { ArrowLayer, LinesLayer, SliceLayer, type SliceAxis } from './fieldLayers';
 import type { FieldLineData } from '../engine/staticsEngine';
 
@@ -56,6 +57,7 @@ export class ViewportController {
   private unsubscribers: Array<() => void> = [];
   private resizeObserver: ResizeObserver;
   private domainKey = '';
+  private probeLabels = new Map<string, { element: HTMLButtonElement; reading: ProbeReading }>();
 
   constructor(container: HTMLElement, callbacks: ViewportCallbacks) {
     this.container = container;
@@ -120,6 +122,7 @@ export class ViewportController {
     this.setupLights();
 
     this.unsubscribers.push(
+      fieldBus.on('probes', (readings) => this.setProbeLabels(readings)),
       fieldBus.on('statics-slice', (slice) => this.applySlice(slice)),
       fieldBus.on('statics-lines', (payload) => this.applyLines(payload.lines, payload.field)),
       fieldBus.on('statics-lattice', (payload) => {
@@ -163,7 +166,7 @@ export class ViewportController {
       this.domainKey = key;
       this.rebuildEnvironment(scene);
     }
-    if (!previous) this.applyCamera(scene);
+    if (!previous || previous.id !== scene.id) this.applyCamera(scene);
     this.syncObjects(scene);
     this.updateDisplay(scene);
     this.updateSelection();
@@ -203,14 +206,14 @@ export class ViewportController {
   }
 
   private rebuildEnvironment(scene: Scene): void {
-    if (this.domainBox) { this.scene.remove(this.domainBox); this.domainBox.geometry.dispose(); }
+    if (this.domainBox) { this.helperGroup.remove(this.domainBox); this.domainBox.geometry.dispose(); }
     if (this.grid) {
-      this.scene.remove(this.grid);
+      this.helperGroup.remove(this.grid);
       this.grid.geometry.dispose();
       (this.grid.material as THREE.Material).dispose();
     }
     if (this.axes) {
-      this.scene.remove(this.axes);
+      this.helperGroup.remove(this.axes);
       this.axes.geometry.dispose();
       (this.axes.material as THREE.Material).dispose();
     }
@@ -243,7 +246,7 @@ export class ViewportController {
     for (const obj of scene.objects) {
       seen.add(obj.id);
       let view = this.views.get(obj.id);
-      const expected = objectSignatureFor(obj);
+      const expected = objectSignature(obj);
       if (view && view.signature !== expected) {
         this.objectGroup.remove(view.group);
         disposeObjectView(view);
@@ -270,6 +273,15 @@ export class ViewportController {
       view.group.visible = obj.visible;
       view.group.name = obj.name;
       if (view.boundCurrent) view.boundCurrent.visible = !!scene.display.showBoundCurrent;
+      if (obj.kind === 'conductor') view.group.traverse(child => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const mat = child.material as THREE.MeshStandardMaterial;
+        const opacity = scene.display.conductorOpacity ?? 1;
+        mat.transparent = opacity < 1;
+        mat.opacity = opacity;
+        mat.depthWrite = opacity >= 1;
+        mat.needsUpdate = true;
+      });
     }
     for (const [id, view] of this.views) {
       if (!seen.has(id)) {
@@ -338,6 +350,7 @@ export class ViewportController {
           : this.sceneData.display.slicePositions.z;
       layer.setPosition(p, this.sceneData.domain.center, this.sceneData.domain.size);
     }
+    if (this.sceneData) this.updateDisplay(this.sceneData);
     this.emitLegend(slice.quantity, slice.min, slice.max);
   }
 
@@ -355,8 +368,10 @@ export class ViewportController {
           ? this.sceneData!.display.slicePositions.y
           : this.sceneData!.display.slicePositions.z;
       layer.setPosition(p, this.sceneData!.domain.center, this.sceneData!.domain.size);
-      this.emitLegend(slice.quantity, slice.min, slice.max);
+      if (this.sceneData) this.updateDisplay(this.sceneData);
+    this.emitLegend(slice.quantity, slice.min, slice.max);
     }
+    if (this.sceneData) this.updateDisplay(this.sceneData);
     if (frame.lattice) {
       this.arrows.setData(
         frame.lattice.positions,
@@ -428,6 +443,50 @@ export class ViewportController {
     this.callbacks.onSliceRange?.(null);
   }
 
+  private isPickable(object: THREE.Object3D): boolean {
+    let node: THREE.Object3D | null = object;
+    while (node) { if (!node.visible) return false; node = node.parent; }
+    return true;
+  }
+
+  private setProbeLabels(readings: ProbeReading[]): void {
+    const seen = new Set(readings.map(p => p.id));
+    for (const [id, label] of this.probeLabels) {
+      if (!seen.has(id)) { label.element.remove(); this.probeLabels.delete(id); }
+    }
+    for (const reading of readings) {
+      let label = this.probeLabels.get(reading.id);
+      if (!label) {
+        const element = document.createElement('button');
+        element.type = 'button';
+        element.className = 'probe-label';
+        element.addEventListener('click', () => this.callbacks.onSelect(reading.id));
+        this.container.appendChild(element);
+        label = { element, reading };
+        this.probeLabels.set(reading.id, label);
+      }
+      label.reading = reading;
+      const name = this.sceneData?.objects.find(o => o.id === reading.id)?.name ?? 'Probe';
+      label.element.textContent = `${name}\n|E| ${formatPrefixed(reading.Emag, 'V/m')} · |B| ${formatPrefixed(reading.Bmag, 'T')}`;
+      label.element.title = 'Click to edit this coordinate and see vector components';
+    }
+  }
+
+  private positionProbeLabels(): void {
+    const d = this.sceneData;
+    if (!d) return;
+    const position = new THREE.Vector3();
+    for (const { element, reading } of this.probeLabels.values()) {
+      const object = d.objects.find(o => o.id === reading.id);
+      position.set(...reading.position).project(this.camera);
+      const outside = reading.position.some((v, i) => Math.abs(v - d.domain.center[i]) > d.domain.size[i] / 2);
+      const visible = d.display.showProbeLabels && object?.visible && !outside && Math.abs(position.z) < 1 && Math.abs(position.x) < 1 && Math.abs(position.y) < 1;
+      element.style.display = visible ? '' : 'none';
+      element.style.left = `${(position.x + 1) * this.container.clientWidth / 2}px`;
+      element.style.top = `${(1 - position.y) * this.container.clientHeight / 2}px`;
+    }
+  }
+
   private onPointerDown = (event: PointerEvent): void => {
     this.pointerDown.set(event.clientX, event.clientY);
   };
@@ -442,6 +501,7 @@ export class ViewportController {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hits = this.raycaster.intersectObjects(this.objectGroup.children, true);
     for (const hit of hits) {
+      if (!this.isPickable(hit.object)) continue;
       let node: THREE.Object3D | null = hit.object;
       while (node && !node.userData.id) node = node.parent;
       if (node?.userData.id) {
@@ -460,6 +520,7 @@ export class ViewportController {
     const hits = this.raycaster.intersectObjects(this.objectGroup.children, true);
     let cursor = 'default';
     for (const hit of hits) {
+      if (!this.isPickable(hit.object)) continue;
       let node: THREE.Object3D | null = hit.object;
       while (node && !node.userData.id) node = node.parent;
       if (node?.userData.id) { cursor = 'pointer'; break; }
@@ -488,6 +549,7 @@ export class ViewportController {
       this.fpsAt = now;
     }
     this.controls.update();
+    this.positionProbeLabels();
     if (this.selectedId) {
       const view = this.views.get(this.selectedId);
       if (view) this.selectionBox.setFromObject(view.group);
@@ -503,6 +565,8 @@ export class ViewportController {
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove);
     for (const unsub of this.unsubscribers) unsub();
+    for (const label of this.probeLabels.values()) label.element.remove();
+    this.probeLabels.clear();
     this.controls.dispose();
     this.transform.dispose();
     for (const view of this.views.values()) disposeObjectView(view);
@@ -515,24 +579,3 @@ export class ViewportController {
     this.renderer.domElement.remove();
   }
 }
-
-function objectSignatureFor(obj: SceneObject): string {
-  // Kept in sync with objectFactory.signature.
-  return [
-    obj.kind,
-    obj.kind === 'charge' ? obj.charge : '',
-    obj.kind === 'chargedSphere' ? `${obj.charge}:${obj.radius}:${obj.shell}` : '',
-    obj.kind === 'conductor' ? `${obj.shape}:${obj.size.join(',')}` : '',
-    obj.kind === 'dielectric' ? `${obj.shape}:${obj.size.join(',')}:${obj.epsilonR}` : '',
-    obj.kind === 'wire' ? `${JSON.stringify(obj.points)}:${obj.current}:${obj.wireRadius}:${obj.closed}` : '',
-    obj.kind === 'loop' ? `${obj.radius}:${obj.current}:${obj.wireRadius}` : '',
-    obj.kind === 'coil' ? `${obj.radius}:${obj.length}:${obj.turns}:${obj.wireRadius}:${obj.current}` : '',
-    obj.kind === 'magnet' ? `${obj.radius}:${obj.length}:${obj.magnetization}` : '',
-    obj.kind === 'particle' ? `${obj.species}:${obj.charge}` : '',
-    obj.kind === 'probe' ? obj.quantity : '',
-    obj.kind === 'planeWave' ? `${obj.frequency}:${obj.polarization}` : '',
-    obj.kind === 'pointSource' ? `${obj.component}:${obj.frequency}` : '',
-    obj.kind === 'antenna' ? `${obj.length}:${obj.frequency}` : '',
-  ].join('|');
-}
-

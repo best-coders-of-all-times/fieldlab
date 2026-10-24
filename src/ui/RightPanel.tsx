@@ -1,7 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import katex from 'katex';
 import { useAppStore } from '../app/store';
 import { Icon } from './Icon';
+import { MotionEditor } from './MotionEditor';
+import { ProbeReadout } from './ProbeReadout';
+import { makeProbe } from '../scene/defaults';
 import {
   Button,
   CheckRow,
@@ -133,46 +136,7 @@ function Inspector() {
         </div>
       </PanelSection>
 
-      {obj.motion && (
-        <PanelSection title="Scripted motion" defaultOpen={false}>
-          <Field label="Kind">
-            <Select
-              value={obj.motion.kind}
-              options={[
-                { value: 'oscillate', label: 'Oscillate along axis' },
-                { value: 'spin', label: 'Spin about axis' },
-              ]}
-              onChange={(kind) => patch({ motion: { ...obj.motion!, kind } })}
-            />
-          </Field>
-          <Field label="Axis">
-            <Vec3Input value={obj.motion.axis} step={0.5} onChange={(axis) => patch({ motion: { ...obj.motion!, axis } })} />
-          </Field>
-          {obj.motion.kind === 'oscillate' && (
-            <Field label="Amplitude">
-              <Slider
-                value={obj.motion.amplitude}
-                min={0.02}
-                max={0.38}
-                step={0.01}
-                format={(v) => `${(v * 100).toFixed(0)} cm`}
-                onChange={(amplitude) => patch({ motion: { ...obj.motion!, amplitude } })}
-              />
-            </Field>
-          )}
-          <Field label="Frequency">
-            <Slider
-              value={obj.motion.frequency}
-              min={0.05}
-              max={2}
-              step={0.01}
-              format={(v) => `${v.toFixed(2)} Hz`}
-              onChange={(frequency) => patch({ motion: { ...obj.motion!, frequency } })}
-            />
-          </Field>
-          <div className="note">Motion is prescribed for the induction demos; flux and EMF are recomputed every frame from the moved sources.</div>
-        </PanelSection>
-      )}
+      {scene.mode === 'fields' && <MotionEditor obj={obj} patch={patch} />}
 
       <ObjectPhysics obj={obj} patch={patch} />
 
@@ -280,6 +244,7 @@ function ObjectPhysics({
         <Field label="Relative permeability μᵣ">
           <Slider value={obj.muR} min={0.5} max={10} step={0.1} format={(v) => v.toFixed(2)} onChange={(v) => patch({ muR: v })} />
         </Field>
+        <div className="note">Permeability and conductivity affect wave scenes. Static B uses the vacuum Biot–Savart model; static dielectrics use permittivity.</div>
         <Field label="Conductivity σ">
           <NumberInput value={obj.sigma} step={0.01} unit="S/m" onChange={(v) => patch({ sigma: Math.max(0, v) })} />
         </Field>
@@ -296,16 +261,19 @@ function ObjectPhysics({
           <NumberInput value={obj.wireRadius} step={0.002} unit="m" onChange={(v) => patch({ wireRadius: Math.max(0.001, v) })} />
         </Field>
         <CheckRow label="Closed loop" checked={obj.closed} onChange={(v) => patch({ closed: v })} />
-        {obj.points.length === 2 && (
-          <>
-            <Field label="Local start" hint="Relative to the object's position and rotation">
-              <Vec3Input value={obj.points[0]} step={0.02} unit="m" onChange={(v) => patch({ points: [v, obj.points[1]] })} />
-            </Field>
-            <Field label="Local end">
-              <Vec3Input value={obj.points[1]} step={0.02} unit="m" onChange={(v) => patch({ points: [obj.points[0], v] })} />
-            </Field>
-          </>
-        )}
+        <Field label="Path shape">
+          <Select value={obj.path ?? 'polyline'} options={[{ value: 'polyline', label: 'Straight segments' }, { value: 'smooth', label: 'Smooth curve through points' }]} onChange={path => patch({ path })} />
+        </Field>
+        {obj.points.map((point, i) => <div className="wire-point" key={i}>
+          <Field label={`Point ${i + 1}`} hint="Local coordinates in metres">
+            <Vec3Input value={point} step={0.01} onChange={value => patch({ points: obj.points.map((p, j) => i === j ? value : p) })} />
+          </Field>
+          <Button title={`Remove point ${i + 1}`} disabled={obj.points.length <= 2} onClick={() => patch({ points: obj.points.filter((_, j) => j !== i) })}><Icon name="trash" size={12} /></Button>
+        </div>)}
+        <Button disabled={obj.points.length >= 256} onClick={() => {
+          const end = obj.points.at(-1) ?? [0, 0, 0];
+          patch({ points: [...obj.points, [end[0] + 0.05, end[1] + 0.05, end[2]]] });
+        }}>Add control point</Button>
         <div className="note">B is integrated with Biot–Savart over the filament. Current direction is from the first point to the last.</div>
       </PanelSection>
     );
@@ -357,6 +325,8 @@ function ObjectPhysics({
           <NumberInput value={obj.magnetization} step={1e5} unit="A/m" onChange={(v) => patch({ magnetization: v })} />
         </Field>
         <div className="note">Modelled by equivalent surface current loops, K_b = M × n̂. Toggle the overlay in View layers.</div>
+        <div className="stat-line"><span>Side surface |K_b|</span><b>{formatPrefixed(Math.abs(obj.magnetization), 'A/m')}</b></div>
+        <div className="note">Gold rings and arrowheads show current direction; the mint arrow shows magnetisation. Reverse M to reverse the currents and poles. End faces carry no bound current for this uniform axial magnetisation.</div>
       </PanelSection>
     );
   }
@@ -409,7 +379,8 @@ function ObjectPhysics({
             onChange={(quantity) => patch({ quantity })}
           />
         </Field>
-        <div className="note">Move the probe to sample E, B and φ live. The Data tab lists all probes.</div>
+        <LiveProbe id={obj.id} />
+        <div className="note">Enter a world coordinate in Position above. This passive probe samples all E and B components without disturbing the field.</div>
       </PanelSection>
     );
   }
@@ -595,6 +566,10 @@ function DisplayPanel() {
       </PanelSection>
 
       <PanelSection title="Scene overlays">
+        <Field label="Conductor opacity" hint="Visual only: transparency leaves the conductor in the physics solve">
+          <Slider value={d.conductorOpacity} min={0.05} max={1} step={0.05} format={v => `${Math.round(v * 100)}%`} onChange={conductorOpacity => setDisplay({ conductorOpacity })} />
+        </Field>
+        <CheckRow label="Probe labels" checked={d.showProbeLabels} onChange={showProbeLabels => setDisplay({ showProbeLabels })} />
         <CheckRow label="Grid" checked={d.showGrid} onChange={(showGrid) => setDisplay({ showGrid })} />
         <CheckRow label="Axes" checked={d.showAxes} onChange={(showAxes) => setDisplay({ showAxes })} />
         <CheckRow label="Domain box" checked={d.showDomain} onChange={(showDomain) => setDisplay({ showDomain })} />
@@ -673,7 +648,7 @@ function SimulationPanel() {
             <Field label="External B" hint="Uniform background magnetic field">
               <Vec3Input value={sim.externalB} step={1e-4} unit="T" onChange={(externalB) => setSimulation({ externalB })} />
             </Field>
-            <Field label="Particle slow-motion" hint="Wall seconds per 200 ns of simulated time at 1×">
+            <Field label="Animation speed" hint="Induction: simulated seconds per wall second. Particles: 200 ns per wall second at 1×.">
               <Slider value={sim.timeScale} min={0.1} max={4} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(timeScale) => setSimulation({ timeScale })} />
             </Field>
             <div className="note">
@@ -813,6 +788,7 @@ function MeasurePanel() {
             </div>
           ))}
           <div className="note">ε = −dΦ/dt from the numerical flux derivative. In the moving-rod scene it is computed from ∫(v×B)·dl instead.</div>
+          <div className="note">E readouts show the electrostatic contribution. This quasistatic model reports EMF but does not solve the spatial induced E or the induced circuit current.</div>
         </PanelSection>
       )}
 
@@ -841,22 +817,12 @@ function MeasurePanel() {
       )}
 
       <PanelSection title={`Probes (${probes.length})`}>
-        {probes.length === 0 && <div className="note">Add a probe object to sample E, B and φ.</div>}
-        <div className="probe-table">
-          {probes.map((p) => (
-            <div className="probe-row" key={p.id}>
-              <div className="probe-row-head">
-                <span>{scene.objects.find((o) => o.id === p.id)?.name ?? 'Probe'}</span>
-                <span style={{ color: 'var(--muted)' }}>{p.position.map((v) => v.toFixed(2)).join(', ')}</span>
-              </div>
-              <div className="probe-vals">
-                <span>E <b>{formatPrefixed(p.Emag, 'V/m')}</b></span>
-                <span>B <b>{formatPrefixed(p.Bmag, 'T')}</b></span>
-                <span>φ <b>{formatPrefixed(p.phi, 'V')}</b></span>
-              </div>
-            </div>
-          ))}
-        </div>
+        <CoordinateProbe />
+        {probes.map(p => <div className="probe-row" key={p.id}>
+          <div className="probe-row-head"><button className="mini-btn" onClick={() => useAppStore.getState().select(p.id)}>{scene.objects.find(o => o.id === p.id)?.name ?? 'Probe'}</button></div>
+          <div className="note">({p.position.map(v => formatSci(v, 5)).join(', ')}) m</div>
+          <ProbeReadout reading={p} />
+        </div>)}
       </PanelSection>
 
       {summary && summary.conductors.length > 0 && (
@@ -886,9 +852,22 @@ function MeasurePanel() {
             </Button>
           </>
         ) : (
-          <div className="note">Switch to Waves to see FDTD diagnostics.</div>
+          <div className="note">Choose a wave scene from the library to see FDTD diagnostics.</div>
         )}
       </PanelSection>
     </>
   );
+}
+
+function LiveProbe({ id }: { id: string }) {
+  const reading = useAppStore(s => s.probes.find(p => p.id === id));
+  return <ProbeReadout reading={reading} />;
+}
+
+function CoordinateProbe() {
+  const [position, setPosition] = useState<[number, number, number]>([0, 0, 0]);
+  return <>
+    <Field label="Sample at coordinate" hint="World x, y, z in metres"><Vec3Input value={position} onChange={setPosition} unit="m" /></Field>
+    <Button onClick={() => useAppStore.getState().addObject(makeProbe(position))}>Add probe here</Button>
+  </>;
 }

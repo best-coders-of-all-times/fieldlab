@@ -482,3 +482,33 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   .time-readout { display: none; }
   .status-chip { display: none; }
 }
+/* Coordinate readouts and custom scene tools. */
+.probe-label {
+  position: absolute;
+  z-index: 4;
+  transform: translate(18px, -50%);
+  white-space: pre;
+  text-align: left;
+  padding: 6px 9px;
+  color: #ffe6b2;
+  background: rgba(7, 12, 20, .88);
+  border: 1px solid rgba(255, 198, 109, .4);
+  border-radius: 6px;
+  font: 11px/1.6 system-ui, sans-serif;
+  cursor: pointer;
+}
+.path-editor {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: 11px/1.6 monospace;
+}
+.wire-point { display: flex; align-items: center; gap: 4px; }
+.wire-point > .field { flex: 1; min-width: 0; }
+.probe-components { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.custom-scene { width: 100%; margin-bottom: 10px; }

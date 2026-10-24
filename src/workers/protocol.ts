@@ -1,4 +1,5 @@
 import type { Vec3 } from '../engine/math/vec3';
+import type { MotionTransform } from '../engine/induction/system';
 import type {
   FdtdMeta,
   FdtdSample,
@@ -12,10 +13,14 @@ import type {
   ProbeReading,
   Scene,
   SliceQuantity,
+  DisplaySettings,
+  ProbeObject,
 } from '../scene/types';
 
 export type StaticsRequest =
   | { type: 'init'; generation: number; scene: Scene }
+  | { type: 'frame'; generation: number; requestId: number; time: number;
+      transforms: MotionTransform[]; display: DisplaySettings; probes: ProbeObject[] }
   | {
       type: 'slice';
       generation: number;
@@ -38,7 +43,7 @@ export type StaticsRequest =
       type: 'probe';
       generation: number;
       requestId: number;
-      points: Vec3[];
+      points: Array<{ id: string; position: Vec3 }>;
     }
   | {
       type: 'lattice';
@@ -49,6 +54,10 @@ export type StaticsRequest =
     };
 
 export type StaticsResponse =
+  | { type: 'frame'; generation: number; requestId: number; time: number;
+      slices: SliceData[]; probes: ProbeReading[]; summary: StaticsSummary;
+      lines?: { field: 'E' | 'B'; lines: FieldLineData[] };
+      lattice?: { field: 'E' | 'B' | 'P'; positions: Float32Array; vectors: Float32Array; magnitudes: Float32Array } }
   | {
       type: 'ready';
       generation: number;

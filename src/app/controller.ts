@@ -21,11 +21,11 @@ function physicsKey(scene: Scene): string {
     mode: scene.mode,
     domain: scene.domain,
     objects: scene.objects
-      .filter((o) => !isProbe(o))
+      .filter((o) => !isProbe(o) || o.motion)
       .map((o) => isParticle(o)
         // Trail length is purely visual; changing it should not restart the orbit.
         ? { kind: o.kind, id: o.id, position: o.position, velocity: o.velocity,
-            charge: o.charge, mass: o.mass, visible: o.visible }
+            charge: o.charge, mass: o.mass, visible: o.visible, motion: o.motion }
         : { ...o, visible: o.visible }),
     resolution: scene.simulation.resolution,
     staticBoundary: scene.simulation.staticBoundary,
@@ -64,6 +64,11 @@ export class SimulationController {
   private particleTelemetryAt = 0;
   private inductionTelemetryAt = 0;
   private disposed = false;
+  private fieldFramePending = false;
+  private fieldFrameDirty = false;
+  private latestMotion: InductionFrame | null = null;
+  private fieldFrameAt = 0;
+  private probeRequest = 0;
 
   update(scene: Scene, playing: boolean): void {
     if (this.disposed) return;
@@ -97,7 +102,6 @@ export class SimulationController {
     if (dKey !== this.display) {
       this.display = dKey;
       if (scene.mode === 'fields') this.scheduleStaticsDisplay();
-      else this.fdtdWorker?.postMessage({ type: 'config', generation: this.generation, scene } as FdtdRequest);
     }
 
     if (scene.mode === 'waves') {
@@ -113,12 +117,20 @@ export class SimulationController {
 
   private reinit(scene: Scene): void {
     this.generation++;
+    this.fieldFramePending = false;
+    this.fieldFrameDirty = false;
+    this.latestMotion = null;
+    this.fieldFrameAt = 0;
+    this.probeRequest = 0;
     this.staticsReady = false;
     this.fdtdReady = false;
     useAppStore.getState().setStatus({ phase: 'solving' });
     useAppStore.getState().setProbes([]);
     useAppStore.getState().setTime(0);
     useAppStore.getState().clearChart();
+    useAppStore.getState().setStaticsSummary(null);
+    useAppStore.getState().setFdtdMeta(null);
+    useAppStore.setState({ measurements: {} });
 
     if (scene.mode === 'fields') {
       this.terminateFdtd();
@@ -163,6 +175,19 @@ export class SimulationController {
       this.applyStaticsMeasurements(msg.summary);
       this.scheduleStaticsDisplay();
       if (this.scene) this.requestExternalProbes(this.scene);
+    } else if (msg.type === 'frame') {
+      this.fieldFramePending = false;
+      store.setStaticsSummary(msg.summary);
+      this.applyStaticsMeasurements(msg.summary);
+      for (const slice of msg.slices) fieldBus.emit('statics-slice', slice);
+      if (msg.lines) fieldBus.emit('statics-lines', msg.lines);
+      if (msg.lattice) fieldBus.emit('statics-lattice', msg.lattice);
+      store.setProbes(msg.probes);
+      if (msg.probes.length) store.appendChart({ t: msg.time, values: Object.fromEntries(
+        msg.probes.flatMap(p => [[`${p.id}:E`, p.Emag], [`${p.id}:B`, p.Bmag]]),
+      ) });
+      // Consume the latest pose only. Never queue every animation tick.
+      if (this.fieldFrameDirty || (this.latestMotion && this.latestMotion.time > msg.time)) this.requestMotionFields();
     } else if (msg.type === 'slice') {
       fieldBus.emit('statics-slice', msg.slice);
     } else if (msg.type === 'lines') {
@@ -175,7 +200,7 @@ export class SimulationController {
         magnitudes: msg.magnitudes,
       } as LatticePayload);
     } else if (msg.type === 'probe') {
-      store.setProbes(msg.probes);
+      if (msg.requestId === this.probeRequest) store.setProbes(msg.probes);
     } else if (msg.type === 'error') {
       this.fail(msg.message);
     }
@@ -206,6 +231,7 @@ export class SimulationController {
 
   requestStaticsDisplay(): void {
     if (!this.staticsReady || !this.scene || !this.staticsWorker) return;
+    if (this.latestMotion) { this.requestMotionFields(); return; }
     const scene = this.scene;
     const display = scene.display;
     const send = (msg: StaticsRequest) => this.staticsWorker?.postMessage(msg);
@@ -251,10 +277,24 @@ export class SimulationController {
 
   private requestExternalProbes(scene: Scene): void {
     if (!this.staticsReady || !this.staticsWorker) return;
-    const points = scene.objects.filter(isProbe).map((p) => p.position);
-    if (points.length === 0) return;
+    if (this.latestMotion) { this.requestMotionFields(); return; }
+    const points = scene.objects.filter(p => isProbe(p) && p.visible).map((p) => ({ id: p.id, position: p.position }));
+    this.probeRequest = ++this.requestCounter;
     this.staticsWorker.postMessage({
-      type: 'probe', generation: this.generation, requestId: ++this.requestCounter, points,
+      type: 'probe', generation: this.generation, requestId: this.probeRequest, points,
+    } as StaticsRequest);
+  }
+
+  private requestMotionFields(): void {
+    if (!this.staticsReady || !this.staticsWorker || !this.scene || !this.latestMotion) return;
+    if (this.fieldFramePending) { this.fieldFrameDirty = true; return; }
+    this.fieldFramePending = true;
+    this.fieldFrameDirty = false;
+    this.fieldFrameAt = performance.now();
+    this.staticsWorker.postMessage({ type: 'frame', generation: this.generation,
+      requestId: ++this.requestCounter, time: this.latestMotion.time,
+      transforms: this.latestMotion.transforms, display: this.scene.display,
+      probes: this.scene.objects.filter(isProbe),
     } as StaticsRequest);
   }
 
@@ -420,6 +460,8 @@ export class SimulationController {
 
   private publishInductionFrame(frame: InductionFrame): void {
     fieldBus.emit('induction-frame', frame);
+    this.latestMotion = frame;
+    if (performance.now() - this.fieldFrameAt >= 100 || !this.playing) this.requestMotionFields();
     const now = performance.now();
     if (now - this.inductionTelemetryAt < 120) return;
     this.inductionTelemetryAt = now;
@@ -443,8 +485,9 @@ export class SimulationController {
   }
 
   reset(): void {
-    if (this.mode === 'waves') this.fdtdWorker?.postMessage({ type: 'reset' } as FdtdRequest);
-    else if (this.scene) this.reinit(this.scene);
+    if (this.reinitTimer) { clearTimeout(this.reinitTimer); this.reinitTimer = null; }
+    if (this.scene) this.physics = physicsKey(this.scene);
+    if (this.scene) this.reinit(this.scene);
   }
 
   private fail(message: string): void {

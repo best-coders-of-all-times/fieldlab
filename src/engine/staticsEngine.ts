@@ -22,6 +22,7 @@ import type {
   SliceQuantity,
 } from '../scene/types';
 import { isConductor, isChargedSphere, isCharge, isDielectric, isProbe } from '../scene/types';
+import type { MotionTransform } from './induction/system';
 
 export interface StaticsSummary {
   grid?: {
@@ -62,18 +63,19 @@ export interface FieldLineData {
 }
 
 export class StaticsEngine {
-  readonly scene: Scene;
+  scene: Scene;
   readonly grid: GridSpec | null;
-  readonly raster: RasterResult | null;
-  readonly poisson: PoissonResult | null;
-  readonly analytic: AnalyticSources;
-  readonly magneto: MagnetostaticSources;
+  raster: RasterResult | null;
+  poisson: PoissonResult | null;
+  analytic: AnalyticSources;
+  magneto: MagnetostaticSources;
   readonly summary: StaticsSummary;
 
   constructor(scene: Scene) {
     const t0 = performance.now();
     this.scene = scene;
-    const needsGrid = scene.objects.some((o) => isConductor(o) || isDielectric(o));
+    const needsGrid = scene.simulation.staticBoundary === 'grounded' ||
+      scene.objects.some((o) => o.visible && (isConductor(o) || isDielectric(o)));
     const res = scene.simulation.resolution;
     if (needsGrid) {
       const grid = makeGrid(res + 1, res + 1, res + 1, scene.domain.center, scene.domain.size);
@@ -95,7 +97,7 @@ export class StaticsEngine {
         ? { nx: this.grid.nx, ny: this.grid.ny, nz: this.grid.nz, min: this.grid.min, max: this.grid.max }
         : undefined,
       hasGrid: !!this.poisson,
-      hasB: this.magneto.hasSources,
+      hasB: this.magneto.hasSources || scene.simulation.externalB.some(v => v !== 0),
       conductors: this.poisson?.charges ?? [],
       capacitanceMatrix: this.poisson?.capacitanceMatrix ?? [],
       differentialCapacitance: this.poisson?.differentialCapacitance,
@@ -113,6 +115,36 @@ export class StaticsEngine {
         cells: this.grid ? this.grid.nx * this.grid.ny * this.grid.nz : 0,
       },
     };
+  }
+
+  /** Reuse stationary Poisson fields while refreshing prescribed source motion. */
+  updateMotion(transforms: MotionTransform[]): void {
+    const byId = new Map(transforms.map(t => [t.id, t]));
+    let electricChanged = false;
+    this.scene = { ...this.scene, objects: this.scene.objects.map(o => {
+      const t = byId.get(o.id);
+      if (!t) return o;
+      if (o.visible && (isCharge(o) || isChargedSphere(o) || isConductor(o) || isDielectric(o))) electricChanged = true;
+      return { ...o, position: t.position, rotation: t.rotation };
+    }) };
+    this.analytic = collectAnalyticSources(this.scene.objects, this.scene.simulation.externalField);
+    this.magneto = buildMagnetostaticSources(this.scene.objects);
+    if (electricChanged && this.grid) {
+      this.raster = rasterizeScene(this.scene, this.grid, { charges: true, centering: 'nodes', materials: true });
+      this.poisson = solvePoisson(this.scene, this.grid, this.raster, {
+        externalField: this.scene.simulation.externalField, boundary: this.scene.simulation.staticBoundary,
+        computeCapacitance: false,
+      });
+      this.summary.capacitanceMatrix = this.poisson.capacitanceMatrix;
+      this.summary.differentialCapacitance = this.poisson.differentialCapacitance;
+      this.summary.stats.solveMs = this.poisson.stats.solveMs;
+      this.summary.stats.cycles = this.poisson.stats.cycles;
+      this.summary.stats.iterations = this.poisson.stats.cycles;
+      this.summary.stats.residual = this.poisson.stats.residual;
+    }
+    this.summary.conductors = this.poisson?.charges ?? [];
+    this.summary.electricEnergy = this.poisson?.electricEnergy ?? estimateAnalyticEnergy(this.analytic, this.scene);
+    this.summary.magneticEnergy = this.magneticEnergy();
   }
 
   sampleE(p: Vec3): Vec3 {
@@ -135,7 +167,7 @@ export class StaticsEngine {
   probes(): ProbeReading[] {
     const out: ProbeReading[] = [];
     for (const obj of this.scene.objects) {
-      if (!isProbe(obj)) continue;
+      if (!isProbe(obj) || !obj.visible) continue;
       const E = this.sampleE(obj.position);
       const B = this.sampleB(obj.position);
       out.push({
@@ -226,7 +258,7 @@ export class StaticsEngine {
       case 'Ex': return E[0];
       case 'Ey': return E[1];
       case 'Ez': return E[2];
-      case 'energyE': return 0.5 * EPS0 * (E[0] ** 2 + E[1] ** 2 + E[2] ** 2);
+      case 'energyE': return 0.5 * EPS0 * (this.grid && this.raster ? sampleScalar(this.raster.epsilon, this.grid, p) : 1) * (E[0] ** 2 + E[1] ** 2 + E[2] ** 2);
       default: return Math.hypot(E[0], E[1], E[2]);
     }
   }
@@ -295,11 +327,12 @@ export class StaticsEngine {
     const n = Math.max(8, Math.min(200, Math.round(count)));
 
     if (field === 'E') {
-      const charges = this.scene.objects.filter((o) => isCharge(o) || isChargedSphere(o));
+      const charges = this.scene.objects.filter((o) => o.visible && (isCharge(o) || isChargedSphere(o)));
       if (charges.length > 0) {
         const per = Math.max(6, Math.floor(n / charges.length));
         for (const obj of charges) {
-          const q = obj.kind === 'charge' ? obj.charge : obj.charge;
+          if (!isCharge(obj) && !isChargedSphere(obj)) continue;
+          const q = obj.charge;
           const sign = q >= 0 ? 1 : -1;
           const radius = Math.max(0.008, diag * 0.012, 'radius' in obj ? obj.radius * 1.05 : 0);
           const base = obj.position;
@@ -329,10 +362,26 @@ export class StaticsEngine {
           seeds.push({ point, sign: -1 });
         }
       }
+      // Charge seeds alone miss field lines entering from infinity. Seed the
+      // inflow face of the applied field as well, including conductor scenes.
+      const ext = this.scene.simulation.externalField;
+      if (ext.some(v => v !== 0) && (!this.poisson || this.scene.simulation.staticBoundary === 'open')) {
+        const a = Math.abs(ext[0]) >= Math.abs(ext[1]) && Math.abs(ext[0]) >= Math.abs(ext[2]) ? 0
+          : Math.abs(ext[1]) >= Math.abs(ext[2]) ? 1 : 2;
+        const u = (a + 1) % 3, v = (a + 2) % 3;
+        const side = Math.ceil(Math.sqrt(n));
+        for (let i = 0; i < n; i++) {
+          const p: Vec3 = [...c];
+          p[a] -= Math.sign(ext[a]) * size[a] * 0.495;
+          p[u] += ((i % side + 0.5) / side - 0.5) * size[u] * 0.94;
+          p[v] += ((Math.floor(i / side) + 0.5) / side - 0.5) * size[v] * 0.94;
+          seeds.push({ point: p, sign: 1 });
+        }
+      }
     } else {
       // Seed around current-carrying objects and a generic shell.
       const sources = this.scene.objects.filter(
-        (o) => o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil' || o.kind === 'magnet',
+        (o) => o.visible && (o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil' || o.kind === 'magnet'),
       );
       if (sources.length > 0) {
         const per = Math.max(6, Math.floor(n / sources.length));
@@ -416,7 +465,7 @@ export class StaticsEngine {
         p[1] + (h / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]),
         p[2] + (h / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]),
       ];
-      if (this.insideConductor(next)) break;
+      if (field === 'E' && this.insideConductor(next)) break;
       const outside = Math.abs(next[0] - c[0]) > size[0] * 0.52 ||
         Math.abs(next[1] - c[1]) > size[1] * 0.52 ||
         Math.abs(next[2] - c[2]) > size[2] * 0.52;
@@ -438,7 +487,7 @@ export class StaticsEngine {
   }
 
   magneticEnergy(): number {
-    if (!this.magneto.hasSources) return 0;
+    if (!this.magneto.hasSources && !this.scene.simulation.externalB.some(v => v !== 0)) return 0;
     const c = this.scene.domain.center;
     const size = this.scene.domain.size;
     const n = 12;

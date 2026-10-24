@@ -157,7 +157,11 @@ export function solvePoisson(
   const n = grid.nx * grid.ny * grid.nz;
   const conductors = raster.conductorObjects;
   const nCond = conductors.length;
-  const boundaryAt = boundaryValue(grid, options.externalField, options.boundary);
+  const analytic = collectAnalyticSources(scene.objects, options.externalField);
+  // Approximate an isolated domain by fixing its finite boundary to the bare
+  // charge potential plus -E_external·r. Induced multipoles are truncated.
+  const boundaryAt = options.boundary === 'grounded' ? () => 0
+    : (world: Vec3) => sampleAnalyticPhi(analytic, world);
 
   const rhs = new Float32Array(n);
   for (let c = 0; c < n; c++) {
@@ -165,7 +169,6 @@ export function solvePoisson(
     else rhs[c] = raster.rho[c] / EPS0;
   }
 
-  const analytic = collectAnalyticSources(scene.objects, options.externalField);
   const initial = new Float32Array(n);
   for (let k = 0; k < grid.nz; k++) {
     for (let j = 0; j < grid.ny; j++) {
@@ -184,7 +187,7 @@ export function solvePoisson(
   const tolerance = options.tolerance ?? 2e-5;
   const maxCycles = options.maxCycles ?? 25;
 
-  if (nCond > 0) {
+  if (nCond > 0 && (options.computeCapacitance !== false || conductors.some(c => c.floating))) {
     capacitanceMatrix = Array.from({ length: nCond }, () => new Array(nCond).fill(0));
     const zeroRhs = new Float32Array(n);
     const groundedBoundary = () => 0;
@@ -221,12 +224,21 @@ export function solvePoisson(
   conductors.forEach((c, i) => (c.floating ? floatIdx : fixedIdx).push(i));
 
   if (floatIdx.length > 0 && capacitanceMatrix.length > 0) {
+    // Free charge and the applied boundary field induce charge even with all
+    // conductors at zero potential. Include that offset in Q = C V + Q_source.
+    const backgroundFixed = buildFixed(grid, raster, new Array(nCond).fill(0), boundaryAt);
+    const background = solveMultigrid(grid, raster.epsilon, backgroundFixed.fixed,
+      backgroundFixed.fixedVal, rhs, boundaryAt, initial,
+      { tolerance, maxCycles, preSmooth: 2, postSmooth: 2 });
+    const sourceCharges = conductorCharges(grid, raster, background.phi);
+    cycles += background.cycles;
+    residual = Math.max(residual, background.residual);
     const nf = floatIdx.length;
     const A: number[][] = Array.from({ length: nf }, () => new Array(nf).fill(0));
     const b: number[] = new Array(nf).fill(0);
     for (let a = 0; a < nf; a++) {
       const ia = floatIdx[a];
-      b[a] = conductors[ia].netCharge;
+      b[a] = conductors[ia].netCharge - sourceCharges[ia];
       for (let c = 0; c < nf; c++) {
         const ic = floatIdx[c];
         A[a][c] = capacitanceMatrix[ia][ic];

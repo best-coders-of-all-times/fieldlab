@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { fieldBus } from './fieldBus';
 import type { FdtdMeta } from '../engine/fdtd/fdtd3d';
 import type { Vec3 } from '../engine/math/vec3';
 import type { StaticsSummary } from '../engine/staticsEngine';
@@ -63,6 +64,7 @@ interface AppState {
   cameraMode: 'iso' | 'front' | 'top' | 'side';
   gizmoMode: 'translate' | 'rotate' | 'scale';
   stepRequest: number;
+  resetRequest: number;
   past: Scene[];
   future: Scene[];
   historyAt: number;
@@ -143,6 +145,7 @@ export const useAppStore = create<AppState>((set, get) => {
     cameraMode: 'iso',
     gizmoMode: 'translate',
     stepRequest: 0,
+    resetRequest: 0,
     past: [],
     future: [],
     historyAt: 0,
@@ -241,10 +244,11 @@ export const useAppStore = create<AppState>((set, get) => {
     resetScene: () => {
       const { presetId, scene } = get();
       const preset = presetId ? getPreset(presetId) : undefined;
-      const next = preset ? preset.create() : { ...cloneScene(scene), objects: [] };
+      const next = preset ? preset.create() : cloneScene(scene);
       pushHistory(scene, true);
       set({
         scene: next,
+        resetRequest: get().resetRequest + 1,
         selectedId: null,
         time: 0,
         measurements: {},
@@ -272,8 +276,17 @@ export const useAppStore = create<AppState>((set, get) => {
     addObject: (obj) => {
       const prev = get().scene;
       pushHistory(prev, true);
+      const magnetic = ['wire', 'loop', 'coil', 'magnet'].includes(obj.kind);
+      const electric = obj.kind === 'charge' || obj.kind === 'chargedSphere';
+      const firstSource = !prev.objects.some(o => o.visible &&
+        ['charge', 'chargedSphere', 'wire', 'loop', 'coil', 'magnet'].includes(o.kind));
+      const display = prev.mode === 'fields' && firstSource && (magnetic || electric)
+        ? { ...prev.display, fieldLines: magnetic ? 'B' as const : 'E' as const,
+            sliceQuantity: magnetic ? 'Bmag' as const : 'Emag' as const,
+            colormap: magnetic ? 'magnetic' as const : 'electric' as const }
+        : prev.display;
       set({
-        scene: { ...prev, objects: [...prev.objects, obj] },
+        scene: { ...prev, display, objects: [...prev.objects, obj] },
         selectedId: obj.id,
         rightTab: 'inspector',
       });
@@ -310,7 +323,7 @@ export const useAppStore = create<AppState>((set, get) => {
     setStaticsSummary: (staticsSummary) => set({ staticsSummary }),
     setFdtdMeta: (fdtdMeta) => set({ fdtdMeta }),
     setMeasurements: (patch) => set((state) => ({ measurements: { ...state.measurements, ...patch } })),
-    setProbes: (probes) => set({ probes }),
+    setProbes: (probes) => { set({ probes }); fieldBus.emit('probes', probes); },
     setParticleTelemetry: (particleTelemetry) => set({ particleTelemetry }),
     setInductionTelemetry: (inductionTelemetry) => set({ inductionTelemetry }),
     appendChart: (point) => set((state) => {

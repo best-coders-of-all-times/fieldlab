@@ -25,6 +25,9 @@ export interface FdtdMeta {
 }
 
 export interface FdtdSample {
+  H: Vec3;
+  epsilonR: number;
+  muR: number;
   E: Vec3;
   B: Vec3;
   Emag: number;
@@ -416,7 +419,7 @@ export class FdtdSolver {
     ];
   }
 
-  private sampleArray(arr: Float32Array, p: Vec3): number {
+  private sampleArray(arr: Float32Array, p: Vec3, multiplier?: Float32Array): number {
     const fx = Math.min(this.nx - 1, Math.max(0, (p[0] - this.grid.min[0]) / this.dx - 0.5));
     const fy = Math.min(this.ny - 1, Math.max(0, (p[1] - this.grid.min[1]) / this.dy - 0.5));
     const fz = Math.min(this.nz - 1, Math.max(0, (p[2] - this.grid.min[2]) / this.dz - 0.5));
@@ -425,14 +428,15 @@ export class FdtdSolver {
     const j1 = Math.min(j0 + 1, this.ny - 1);
     const k1 = Math.min(k0 + 1, this.nz - 1);
     const tx = fx - i0, ty = fy - j0, tz = fz - k0;
-    const c000 = arr[i0 + this.nx * (j0 + this.ny * k0)];
-    const c100 = arr[i1 + this.nx * (j0 + this.ny * k0)];
-    const c010 = arr[i0 + this.nx * (j1 + this.ny * k0)];
-    const c110 = arr[i1 + this.nx * (j1 + this.ny * k0)];
-    const c001 = arr[i0 + this.nx * (j0 + this.ny * k1)];
-    const c101 = arr[i1 + this.nx * (j0 + this.ny * k1)];
-    const c011 = arr[i0 + this.nx * (j1 + this.ny * k1)];
-    const c111 = arr[i1 + this.nx * (j1 + this.ny * k1)];
+    const at = (i: number) => arr[i] * (multiplier?.[i] ?? 1);
+    const c000 = at(i0 + this.nx * (j0 + this.ny * k0));
+    const c100 = at(i1 + this.nx * (j0 + this.ny * k0));
+    const c010 = at(i0 + this.nx * (j1 + this.ny * k0));
+    const c110 = at(i1 + this.nx * (j1 + this.ny * k0));
+    const c001 = at(i0 + this.nx * (j0 + this.ny * k1));
+    const c101 = at(i1 + this.nx * (j0 + this.ny * k1));
+    const c011 = at(i0 + this.nx * (j1 + this.ny * k1));
+    const c111 = at(i1 + this.nx * (j1 + this.ny * k1));
     const c00 = c000 + (c100 - c000) * tx;
     const c10 = c010 + (c110 - c010) * tx;
     const c01 = c001 + (c101 - c001) * tx;
@@ -453,9 +457,10 @@ export class FdtdSolver {
       this.sampleArray(this.Hy, p),
       this.sampleArray(this.Hz, p),
     ];
-    const B: Vec3 = [H[0] * MU0, H[1] * MU0, H[2] * MU0];
+    const B: Vec3 = [this.sampleArray(this.Hx, p, this.muR) * MU0,
+      this.sampleArray(this.Hy, p, this.muR) * MU0, this.sampleArray(this.Hz, p, this.muR) * MU0];
     return {
-      E, B,
+      E, B, H, epsilonR: this.sampleArray(this.epsR, p), muR: this.sampleArray(this.muR, p),
       Emag: Math.hypot(E[0], E[1], E[2]),
       Bmag: Math.hypot(B[0], B[1], B[2]),
     };
@@ -491,13 +496,13 @@ export class FdtdSolver {
           case 'Ey': value = s.E[1]; break;
           case 'Ez': value = s.E[2]; break;
           case 'Bmag': value = s.Bmag; break;
-          case 'energyE': value = 0.5 * EPS0 * s.Emag * s.Emag; break;
-          case 'energyB': value = 0.5 * s.Bmag * s.Bmag / MU0; break;
+          case 'energyE': value = 0.5 * EPS0 * s.epsilonR * s.Emag * s.Emag; break;
+          case 'energyB': value = 0.5 * MU0 * s.muR * (s.H[0] ** 2 + s.H[1] ** 2 + s.H[2] ** 2); break;
           case 'poynting': {
-            const Sx = s.E[1] * s.B[2] - s.E[2] * s.B[1];
-            const Sy = s.E[2] * s.B[0] - s.E[0] * s.B[2];
-            const Sz = s.E[0] * s.B[1] - s.E[1] * s.B[0];
-            value = Math.hypot(Sx, Sy, Sz) / MU0;
+            const Sx = s.E[1] * s.H[2] - s.E[2] * s.H[1];
+            const Sy = s.E[2] * s.H[0] - s.E[0] * s.H[2];
+            const Sz = s.E[0] * s.H[1] - s.E[1] * s.H[0];
+            value = Math.hypot(Sx, Sy, Sz);
             break;
           }
           default: value = s.Emag;
@@ -544,11 +549,11 @@ export class FdtdSolver {
             vectors[o] = s.B[0]; vectors[o + 1] = s.B[1]; vectors[o + 2] = s.B[2];
             magnitudes[o / 3] = s.Bmag;
           } else if (field === 'P') {
-            const sx = s.E[1] * s.B[2] - s.E[2] * s.B[1];
-            const sy = s.E[2] * s.B[0] - s.E[0] * s.B[2];
-            const sz = s.E[0] * s.B[1] - s.E[1] * s.B[0];
-            vectors[o] = sx / MU0; vectors[o + 1] = sy / MU0; vectors[o + 2] = sz / MU0;
-            magnitudes[o / 3] = Math.hypot(sx, sy, sz) / MU0;
+            const sx = s.E[1] * s.H[2] - s.E[2] * s.H[1];
+            const sy = s.E[2] * s.H[0] - s.E[0] * s.H[2];
+            const sz = s.E[0] * s.H[1] - s.E[1] * s.H[0];
+            vectors[o] = sx; vectors[o + 1] = sy; vectors[o + 2] = sz;
+            magnitudes[o / 3] = Math.hypot(sx, sy, sz);
           } else {
             vectors[o] = s.E[0]; vectors[o + 1] = s.E[1]; vectors[o + 2] = s.E[2];
             magnitudes[o / 3] = s.Emag;

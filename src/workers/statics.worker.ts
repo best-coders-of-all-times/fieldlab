@@ -39,7 +39,27 @@ ctx.onmessage = (event: MessageEvent<StaticsRequest>) => {
     }
     if (!engine || msg.generation !== generation) return;
 
-    if (msg.type === 'slice') {
+    if (msg.type === 'frame') {
+      engine.updateMotion(msg.transforms);
+      // Probe edits do not reinitialize physics; carry current IDs/positions.
+      const transformed = new Map(msg.transforms.map(t => [t.id, t]));
+      engine.scene = { ...engine.scene, objects: [
+        ...engine.scene.objects.filter(o => o.kind !== 'probe'),
+        ...msg.probes.map(p => ({ ...p, ...transformed.get(p.id) })),
+      ] };
+      const d = msg.display;
+      const slices = [];
+      if (d.slices.xy) slices.push(engine.slice('z', d.slicePositions.z, d.sliceQuantity, d.sliceResolution));
+      if (d.slices.xz) slices.push(engine.slice('y', d.slicePositions.y, d.sliceQuantity, d.sliceResolution));
+      if (d.slices.yz) slices.push(engine.slice('x', d.slicePositions.x, d.sliceQuantity, d.sliceResolution));
+      const lines = d.fieldLines === 'none' ? undefined : { field: d.fieldLines, lines: engine.fieldLines(d.fieldLines, d.lineCount) };
+      const lattice = d.arrows === 'none' ? undefined : { field: d.arrows, ...engine.lattice(d.arrowDensity, d.arrows) };
+      const transfer: Transferable[] = slices.map(s => s.data.buffer);
+      for (const l of lines?.lines ?? []) transfer.push(l.points.buffer, l.magnitudes.buffer);
+      if (lattice) transfer.push(lattice.positions.buffer, lattice.vectors.buffer, lattice.magnitudes.buffer);
+      reply({ type: 'frame', generation, requestId: msg.requestId, time: msg.time,
+        slices, lines, lattice, probes: engine.probes(), summary: engine.summary }, transfer);
+    } else if (msg.type === 'slice') {
       const slice = engine.slice(msg.axis, msg.position, msg.quantity, msg.resolution);
       reply({ type: 'slice', generation, requestId: msg.requestId, slice }, [slice.data.buffer]);
     } else if (msg.type === 'lines') {
@@ -59,11 +79,11 @@ ctx.onmessage = (event: MessageEvent<StaticsRequest>) => {
         ...lattice,
       }, [lattice.positions.buffer, lattice.vectors.buffer, lattice.magnitudes.buffer]);
     } else if (msg.type === 'probe') {
-      const readings: ProbeReading[] = msg.points.map((p, i) => {
+      const readings: ProbeReading[] = msg.points.map(({ id, position: p }) => {
         const E = engine!.sampleE(p);
         const B = engine!.sampleB(p);
         return {
-          id: `external-${i}`,
+          id,
           position: p,
           E,
           B,

@@ -16,6 +16,7 @@ export default function App() {
   const selectedId = useAppStore((s) => s.selectedId);
   const error = useAppStore((s) => s.error);
   const stepRequest = useAppStore((s) => s.stepRequest);
+  const resetRequest = useAppStore((s) => s.resetRequest);
   const controllerRef = useRef<SimulationController | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -47,6 +48,10 @@ export default function App() {
   useEffect(() => {
     if (stepRequest > 0) controllerRef.current?.step();
   }, [stepRequest]);
+
+  useEffect(() => {
+    if (resetRequest > 0) controllerRef.current?.reset();
+  }, [resetRequest]);
 
   useEffect(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);

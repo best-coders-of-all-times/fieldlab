@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { SceneObject } from '../scene/types';
+import { wirePath } from '../scene/wirePath';
 import type { Vec3 } from '../engine/math/vec3';
 
 export interface ObjectView {
@@ -73,14 +74,14 @@ function tubeFromPoints(points: THREE.Vector3[], radius: number, closed = false)
   return new THREE.TubeGeometry(curve, Math.max(24, points.length * 4), Math.max(radius, 0.002), 8, closed);
 }
 
-function addCurrentChevrons(group: THREE.Group, points: THREE.Vector3[], closed: boolean): void {
+function addCurrentChevrons(group: THREE.Group, points: THREE.Vector3[], closed: boolean, current = 1): void {
   const count = Math.min(9, Math.max(2, Math.floor(points.length / 3)));
   const material = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.85 });
   for (let i = 1; i <= count; i++) {
     const idx = Math.floor((i / (count + 1)) * (points.length - (closed ? 0 : 1)));
     const a = points[idx];
     const b = points[Math.min(points.length - 1, idx + 1)];
-    const dir = b.clone().sub(a);
+    const dir = b.clone().sub(a).multiplyScalar(Math.sign(current));
     if (dir.lengthSq() < 1e-12) continue;
     const cone = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.03, 10), material);
     cone.position.copy(a.clone().add(b).multiplyScalar(0.5));
@@ -167,12 +168,15 @@ export function createObjectView(obj: SceneObject): ObjectView {
       break;
     }
     case 'wire': {
-      const pts = obj.points.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
-      const geometry = tubeFromPoints(pts, obj.wireRadius, obj.closed);
+      const pts = wirePath(obj).map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+      const curve = new THREE.CurvePath<THREE.Vector3>();
+      for (let i = 1; i < pts.length; i++) curve.add(new THREE.LineCurve3(pts[i - 1], pts[i]));
+      if (obj.closed && pts.length > 1) curve.add(new THREE.LineCurve3(pts[pts.length - 1], pts[0]));
+      const geometry = pts.length > 1 ? new THREE.TubeGeometry(curve, Math.max(64, pts.length * 4), Math.max(obj.wireRadius, 0.001), 8, obj.closed) : new THREE.BufferGeometry();
       const mesh = new THREE.Mesh(geometry, copperMaterial());
       mesh.userData.id = obj.id;
       group.add(mesh);
-      if (obj.current !== 0) addCurrentChevrons(group, pts, obj.closed);
+      if (obj.current !== 0) addCurrentChevrons(group, pts, obj.closed, obj.current);
       break;
     }
     case 'loop': {
@@ -186,7 +190,7 @@ export function createObjectView(obj: SceneObject): ObjectView {
           const a = (i / 32) * Math.PI * 2;
           pts.push(new THREE.Vector3(obj.radius * Math.cos(a), obj.radius * Math.sin(a), 0));
         }
-        addCurrentChevrons(group, pts, true);
+        addCurrentChevrons(group, pts, true, obj.current);
       }
       break;
     }
@@ -209,34 +213,44 @@ export function createObjectView(obj: SceneObject): ObjectView {
       const half = obj.length / 2;
       const north = new THREE.Mesh(
         new THREE.CylinderGeometry(obj.radius, obj.radius, half, 40, 1),
-        new THREE.MeshStandardMaterial({ color: 0xe0485c, metalness: 0.55, roughness: 0.35, emissive: 0x3a0910, emissiveIntensity: 0.6 }),
+        new THREE.MeshStandardMaterial({ color: obj.magnetization >= 0 ? 0xe0485c : 0x3d6dff, metalness: 0.55, roughness: 0.35, emissive: 0x3a0910, emissiveIntensity: 0.6 }),
       );
       north.rotation.x = Math.PI / 2;
       north.position.z = half / 2;
       const south = new THREE.Mesh(
         new THREE.CylinderGeometry(obj.radius, obj.radius, half, 40, 1),
-        new THREE.MeshStandardMaterial({ color: 0x3d6dff, metalness: 0.55, roughness: 0.35, emissive: 0x081538, emissiveIntensity: 0.6 }),
+        new THREE.MeshStandardMaterial({ color: obj.magnetization >= 0 ? 0x3d6dff : 0xe0485c, metalness: 0.55, roughness: 0.35, emissive: 0x081538, emissiveIntensity: 0.6 }),
       );
       south.rotation.x = Math.PI / 2;
       south.position.z = -half / 2;
       north.userData.id = obj.id;
       south.userData.id = obj.id;
       group.add(north, south);
-      const nLabel = labelSprite('N', '#ffd7dc', 0.1);
+      const nLabel = labelSprite(obj.magnetization >= 0 ? 'N' : 'S', '#ffd7dc', 0.1);
       nLabel.position.set(0, 0, half + 0.07);
-      const sLabel = labelSprite('S', '#d2e0ff', 0.1);
+      const sLabel = labelSprite(obj.magnetization >= 0 ? 'S' : 'N', '#d2e0ff', 0.1);
       sLabel.position.set(0, 0, -half - 0.07);
       group.add(nLabel, sLabel);
       boundCurrent = new THREE.Group();
-      const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffa8d8, transparent: true, opacity: 0.9 });
-      for (let i = 0; i < 20; i++) {
-        const a = (i / 20) * Math.PI * 2;
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(0.008, 0.028, 8), arrowMat);
-        cone.position.set(obj.radius * Math.cos(a), obj.radius * Math.sin(a), -half * 0.72);
-        cone.rotation.z = a + Math.PI / 2;
-        cone.rotation.x = -Math.PI / 2;
-        boundCurrent.add(cone);
+      const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffd26f, toneMapped: false, depthWrite: false });
+      const radius = obj.radius + Math.max(0.004, obj.radius * 0.08);
+      if (obj.magnetization !== 0) for (let layer = 0; layer < 6; layer++) {
+        const z = -half + (layer + 0.5) * obj.length / 6;
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(radius, Math.min(0.002, obj.radius * 0.035), 5, 48), arrowMat);
+        ring.position.z = z;
+        boundCurrent.add(ring);
+        for (let i = 0; i < 4; i++) {
+          const a = i * Math.PI / 2 + (layer % 2) * Math.PI / 4;
+          const direction = new THREE.Vector3(-Math.sin(a), Math.cos(a), 0).multiplyScalar(Math.sign(obj.magnetization));
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(Math.min(0.006, obj.radius * 0.12), Math.min(0.022, obj.radius * 0.4), 10), arrowMat);
+          cone.position.set(radius * Math.cos(a), radius * Math.sin(a), z);
+          cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+          boundCurrent.add(cone);
+        }
       }
+      const mArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, Math.sign(obj.magnetization) || 1),
+        new THREE.Vector3(radius * 1.6, 0, -half * Math.sign(obj.magnetization)), obj.length, 0x7fffd4, 0.025, 0.014);
+      if (obj.magnetization !== 0) boundCurrent.add(mArrow);
       boundCurrent.position.z = 0;
       boundCurrent.visible = false;
       group.add(boundCurrent);
@@ -325,7 +339,7 @@ export function objectSignature(obj: SceneObject): string {
     case 'chargedSphere': return `sphere:${obj.charge.toPrecision(5)}:${obj.radius}:${obj.shell}`;
     case 'conductor': return `cond:${obj.shape}:${obj.size.join(',')}`;
     case 'dielectric': return `diel:${obj.shape}:${obj.size.join(',')}:${obj.epsilonR}`;
-    case 'wire': return `wire:${JSON.stringify(obj.points)}:${obj.current}:${obj.wireRadius}:${obj.closed}`;
+    case 'wire': return `wire:${JSON.stringify(obj.points)}:${obj.current}:${obj.wireRadius}:${obj.closed}:${obj.path ?? 'polyline'}`;
     case 'loop': return `loop:${obj.radius}:${obj.current}:${obj.wireRadius}`;
     case 'coil': return `coil:${obj.radius}:${obj.length}:${obj.turns}:${obj.wireRadius}:${obj.current}`;
     case 'magnet': return `magnet:${obj.radius}:${obj.length}:${obj.magnetization}`;
@@ -340,7 +354,7 @@ export function objectSignature(obj: SceneObject): string {
 
 export function disposeObjectView(view: ObjectView): void {
   view.group.traverse((child) => {
-    if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Sprite) {
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Sprite) {
       const anyChild = child as THREE.Mesh;
       anyChild.geometry?.dispose?.();
       const material = anyChild.material;

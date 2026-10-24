@@ -13,24 +13,28 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div className="modal-body">
-          <h3>Two regimes, one scene</h3>
+          <h3>Choose an experiment</h3>
           <p>
             <b>Fields</b> solves electrostatics and magnetostatics: analytic superposition where possible,
             a 3D Poisson/multigrid solve for conductors and dielectrics, and Biot–Savart integration for
-            currents and magnets. <b>Waves</b> runs a full time-domain 3D FDTD Maxwell solver with
-            materials, PEC objects, periodic walls and a graded absorbing layer.
+            currents and magnets. Wave scenes use a time-domain 3D FDTD curl-equation solver with
+            materials, PEC objects, periodic walls and a graded absorbing layer. Choose a preset in
+            Scenes; its solver is selected automatically.
           </p>
           <h3>Building a scene</h3>
           <p>
-            Use <b>Add</b> to insert objects, click an object to select it, then drag the transform gizmo.
-            The inspector exposes charge, current, material, potential and source parameters. Everything
-            re-solves in a worker; the viewport never blocks.
+            Start with <b>New custom scene</b> or edit a preset. Use <b>Add</b> to insert objects,
+            then edit their positions and parameters. Wires accept any number of 3D control points up
+            to 256, with straight or smooth paths. Motion supports oscillation, spin and timed keyframes.
+            Export saves your design as JSON; autosave restores the latest scene on reload.
           </p>
           <h3>Reading the field</h3>
           <p>
             Slices show a scalar heatmap; field lines and arrows show direction. The legend gives the
-            mapped quantity and range. Probes report E, B and φ at marked points. In waves mode the
-            probe chart records E and B versus simulated time.
+            mapped quantity and range. Under Data, enter a coordinate and add a probe there. Select a
+            probe to see every E/B component, or read its magnitude label in the viewport. View includes
+            conductor opacity for cavity interiors and directional surface-current rings on magnets.
+            Uniform-field magnitudes can change without changing line direction; use probe values to compare them.
           </p>
           <h3>Shortcuts</h3>
           <div className="kbd-grid">
@@ -44,12 +48,25 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
           </div>
           <h3>Numerical notes</h3>
           <p>
-            The Poisson solver uses a finite-volume multigrid discretisation on a 65³ node grid. Point
+            The Poisson solver uses a finite-volume multigrid discretisation at the selected resolution. Point
             charges are deposited cloud-in-cell, so fields very close to a charge are regularised at the
             cell scale. The FDTD solver is second order on a Yee lattice; keep at least ~20 cells per
             wavelength. The absorbing layer is impedance-matched but is not a perfect PML, so weak
             reflections can remain. Particles are pushed with Boris and do not self-consistently source
             the fields.
+          </p>
+          <p>
+            Induction is quasistatic: moving fields and integrated EMF update, but E probes show only
+            the electrostatic contribution. Induced electric fields, eddy currents, circuit feedback and
+            radiation are not solved. Static B assumes vacuum permeability. Test particles use the initial
+            analytic source fields, without the Poisson conductor solution or moving-source feedback.
+            Particle and prescribed-motion animations use different clocks.
+          </p>
+          <h3>Runs on your device</h3>
+          <p>
+            All computation runs in your browser. Field solves and overlays use Web Workers; particle
+            and induction stepping also run locally in the browser. Large scenes can reduce refresh
+            rates on your device. Other visitors do not share a physics server with you.
           </p>
           <h3>Units</h3>
           <p>

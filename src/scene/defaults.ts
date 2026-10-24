@@ -50,6 +50,7 @@ export function defaultDisplay(): DisplaySettings {
     showDomain: true,
     showBoundCurrent: false,
     showProbeLabels: true,
+    conductorOpacity: 1,
     colormap: 'electric',
     logScale: false,
     autoRange: true,
@@ -61,7 +62,7 @@ export function defaultDisplay(): DisplaySettings {
 export function defaultSimulation(): SimulationSettings {
   return {
     resolution: 64,
-    staticBoundary: 'grounded',
+    staticBoundary: 'open',
     externalField: [0, 0, 0],
     externalB: [0, 0, 0],
     boundary: { x: 'pml', y: 'pml', z: 'pml' },
@@ -275,15 +276,13 @@ export function makeScene(partial: Partial<Scene> & { name: string }): Scene {
 export function rotateEuler(v: Vec3, rot: Vec3): Vec3 {
   const [rx, ry, rz] = rot;
   let [x, y, z] = v;
-  // X
-  let c = Math.cos(rx), s = Math.sin(rx);
-  [y, z] = [c * y - s * z, s * y + c * z];
-  // Y
+  // Intrinsic XYZ is Rx * Ry * Rz: apply Z first to a column vector.
+  let c = Math.cos(rz), s = Math.sin(rz);
+  [x, y] = [c * x - s * y, s * x + c * y];
   c = Math.cos(ry); s = Math.sin(ry);
   [x, z] = [c * x + s * z, -s * x + c * z];
-  // Z
-  c = Math.cos(rz); s = Math.sin(rz);
-  [x, y] = [c * x - s * y, s * x + c * y];
+  c = Math.cos(rx); s = Math.sin(rx);
+  [y, z] = [c * y - s * z, s * y + c * z];
   return [x, y, z];
 }
 
@@ -295,14 +294,14 @@ export function localToWorld(obj: SceneObjectBase, p: Vec3): Vec3 {
 export function worldToLocal(obj: SceneObjectBase, p: Vec3): Vec3 {
   const d: Vec3 = [p[0] - obj.position[0], p[1] - obj.position[1], p[2] - obj.position[2]];
   const [rx, ry, rz] = obj.rotation;
-  // inverse Z, Y, X
+  // Inverse: X, Y, Z.
   let [x, y, z] = d;
-  let c = Math.cos(-rz), s = Math.sin(-rz);
-  [x, y] = [c * x - s * y, s * x + c * y];
+  let c = Math.cos(-rx), s = Math.sin(-rx);
+  [y, z] = [c * y - s * z, s * y + c * z];
   c = Math.cos(-ry); s = Math.sin(-ry);
   [x, z] = [c * x + s * z, -s * x + c * z];
-  c = Math.cos(-rx); s = Math.sin(-rx);
-  [y, z] = [c * y - s * z, s * y + c * z];
+  c = Math.cos(-rz); s = Math.sin(-rz);
+  [x, y] = [c * x - s * y, s * x + c * y];
   return [x, y, z];
 }
 

@@ -1,15 +1,16 @@
 import type {
   CoilObject,
   LoopObject,
-  MotionSpec,
   Scene,
   SceneObject,
   WireObject,
 } from '../../scene/types';
 import { isCoil, isLoop, isWire } from '../../scene/types';
 import type { Vec3 } from '../math/vec3';
-import { cross, dot, len } from '../math/vec3';
+import { cross, dot } from '../math/vec3';
+import { motionAt } from '../../scene/motion';
 import { localToWorld, worldAxis } from '../../scene/defaults';
+import { wirePath } from '../../scene/wirePath';
 import { buildMagnetostaticSources, fluxThroughLoop, sampleBAt } from '../magnetostatics/biotSavart';
 
 export interface MotionTransform {
@@ -34,29 +35,6 @@ export interface InductionFrame {
   readings: InductionReading[];
 }
 
-interface MotionState {
-  object: SceneObject;
-  spec: MotionSpec;
-  axis: Vec3;
-  angular: number; // rad/s
-}
-
-function normalizeAxis(axis: Vec3): Vec3 {
-  const l = len(axis);
-  return l < 1e-12 ? [0, 0, 1] : [axis[0] / l, axis[1] / l, axis[2] / l];
-}
-
-/** Euler rotation for a spin about a principal axis (other components kept). */
-function spinRotation(base: Vec3, axis: Vec3, angle: number): Vec3 {
-  const rotation: Vec3 = [base[0], base[1], base[2]];
-  let index = 0;
-  let weight = Math.abs(axis[0]);
-  if (Math.abs(axis[1]) > weight) { index = 1; weight = Math.abs(axis[1]); }
-  if (Math.abs(axis[2]) > weight) { index = 2; }
-  rotation[index] += angle * Math.sign(axis[index] || 1);
-  return rotation;
-}
-
 /**
  * Scripted induction demos: rigid motion, flux through loops and coils, and
  * motional EMF in a moving wire. Fields themselves remain quasi-static and are
@@ -64,7 +42,7 @@ function spinRotation(base: Vec3, axis: Vec3, angle: number): Vec3 {
  */
 export class InductionSystem {
   private scene: Scene;
-  private states: MotionState[] = [];
+  private states: SceneObject[] = [];
   private previousFlux = new Map<string, number>();
   private simTime = 0;
 
@@ -72,13 +50,7 @@ export class InductionSystem {
     this.scene = scene;
     for (const object of scene.objects) {
       if (!object.visible || !object.motion) continue;
-      const axis = normalizeAxis(object.motion.axis);
-      this.states.push({
-        object,
-        spec: object.motion,
-        axis,
-        angular: Math.PI * 2 * object.motion.frequency,
-      });
+      this.states.push(object);
     }
   }
 
@@ -90,45 +62,13 @@ export class InductionSystem {
     return this.simTime;
   }
 
-  private evaluate(state: MotionState, t: number): MotionTransform {
-    const phase = state.spec.phase ?? 0;
-    const angle = state.angular * t + phase;
-    if (state.spec.kind === 'spin') {
-      return {
-        id: state.object.id,
-        position: [state.object.position[0], state.object.position[1], state.object.position[2]],
-        rotation: spinRotation(state.object.rotation, state.axis, angle),
-      };
-    }
-    const offset = state.spec.amplitude * Math.sin(angle);
-    return {
-      id: state.object.id,
-      position: [
-        state.object.position[0] + state.axis[0] * offset,
-        state.object.position[1] + state.axis[1] * offset,
-        state.object.position[2] + state.axis[2] * offset,
-      ],
-      rotation: [state.object.rotation[0], state.object.rotation[1], state.object.rotation[2]],
-    };
-  }
-
-  private velocity(state: MotionState, t: number): Vec3 {
-    const phase = state.spec.phase ?? 0;
-    const angle = state.angular * t + phase;
-    if (state.spec.kind === 'spin') {
-      return [state.axis[0] * state.angular, state.axis[1] * state.angular, state.axis[2] * state.angular];
-    }
-    const speed = state.spec.amplitude * state.angular * Math.cos(angle);
-    return [state.axis[0] * speed, state.axis[1] * speed, state.axis[2] * speed];
-  }
-
   advance(wallSeconds: number, timeScale = 1): InductionFrame | null {
     if (this.states.length === 0) return null;
     const dt = Math.min(Math.max(wallSeconds, 0), 0.08) * Math.max(0.02, timeScale);
     if (dt <= 0) return null;
     this.simTime += dt;
 
-    const transforms = this.states.map((s) => this.evaluate(s, this.simTime));
+    const transforms = this.states.map((o) => motionAt(o, this.simTime));
     const transformById = new Map(transforms.map((t) => [t.id, t]));
     const adjusted: SceneObject[] = this.scene.objects.map((o) => {
       const t = transformById.get(o.id);
@@ -141,6 +81,7 @@ export class InductionSystem {
 
     for (const object of this.scene.objects) {
       const moving = adjustedById.get(object.id) ?? object;
+      if (!object.visible) continue;
       if (isLoop(object)) {
         const flux = this.loopFlux(segments, moving as LoopObject, externalB);
         readings.push(this.reading(object.id, object.name, flux, 1, dt));
@@ -192,21 +133,21 @@ export class InductionSystem {
   }
 
   private motionalEmf(wire: WireObject, moved: WireObject, segments: ReturnType<typeof buildMagnetostaticSources>['segments'], externalB: Vec3): number {
-    const points = moved.points;
+    const path = wirePath(moved);
+    const points = moved.closed && path.length > 1 ? [...path, path[0]] : path;
     if (points.length < 2) return 0;
-    const state = this.states.find((s) => s.object.id === wire.id);
-    if (!state) return 0;
-    const v0 = this.velocity(state, this.simTime);
+    const delta = 1e-5;
+    const earlier = { ...wire, ...motionAt(wire, this.simTime - delta) };
+    const later = { ...wire, ...motionAt(wire, this.simTime + delta) };
     let emf = 0;
     for (let i = 0; i + 1 < points.length; i++) {
       const a = localToWorld(moved, points[i]);
       const b = localToWorld(moved, points[i + 1]);
       const mid: Vec3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-      let v: Vec3 = v0;
-      if (state.spec.kind === 'spin') {
-        const r: Vec3 = [mid[0] - moved.position[0], mid[1] - moved.position[1], mid[2] - moved.position[2]];
-        v = cross(v0, r);
-      }
+      const localMid: Vec3 = points[i].map((v, k) => (v + points[i + 1][k]) / 2) as Vec3;
+      const pa = localToWorld(earlier, localMid);
+      const pb = localToWorld(later, localMid);
+      const v: Vec3 = pa.map((v, k) => (pb[k] - v) / (2 * delta)) as Vec3;
       const bField = sampleBAt(segments, mid);
       const B: Vec3 = [bField[0] + externalB[0], bField[1] + externalB[1], bField[2] + externalB[2]];
       const drift = cross(v, B);

@@ -50,13 +50,13 @@ export function Field({
   inline?: boolean;
 }) {
   return (
-    <label className={`field ${inline ? 'field-inline' : ''}`}>
+    <div className={`field ${inline ? 'field-inline' : ''}`} role="group" aria-label={label}>
       <span className="field-label">
         {label}
         {hint && <span className="field-hint" title={hint}>?</span>}
       </span>
       <span className="field-control">{children}</span>
-    </label>
+    </div>
   );
 }
 
@@ -168,7 +168,7 @@ export function Vec3Input({
             id={`${id}-${axis}`}
             type="number"
             step={step}
-            value={Number.isFinite(value[i]) ? Number(value[i].toFixed(5)) : 0}
+            value={Number.isFinite(value[i]) ? value[i] : 0}
             onChange={(e) => {
               const next = [...value] as [number, number, number];
               next[i] = parseNumber(e.target.value, value[i]);

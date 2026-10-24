@@ -8,13 +8,25 @@ export type SceneMode = 'fields' | 'waves';
  * along `axis` with the given amplitude; `spin` adds a rotation rate about
  * the (axis-aligned) `axis`.
  */
-export interface MotionSpec {
+export interface PeriodicMotion {
   kind: 'oscillate' | 'spin';
   axis: Vec3;
   amplitude: number; // metres, oscillate only
   frequency: number; // Hz
   phase?: number; // radians
 }
+
+export interface MotionKeyframe {
+  time: number; // seconds
+  position: Vec3; // offset from initial position, metres
+  rotation: Vec3; // offset from initial Euler angles, radians
+}
+
+export type MotionSpec = PeriodicMotion | {
+  kind: 'keyframes';
+  keyframes: MotionKeyframe[];
+  loop: boolean;
+};
 
 export interface SceneObjectBase {
   id: string;
@@ -68,6 +80,7 @@ export interface WireObject extends SceneObjectBase {
   current: number; // A
   wireRadius: number; // m
   closed: boolean;
+  path?: 'polyline' | 'smooth';
 }
 
 export interface LoopObject extends SceneObjectBase {
@@ -213,6 +226,7 @@ export interface DisplaySettings {
   showDomain: boolean;
   showBoundCurrent: boolean;
   showProbeLabels: boolean;
+  conductorOpacity: number;
   colormap: ColormapName;
   logScale: boolean;
   autoRange: boolean;
