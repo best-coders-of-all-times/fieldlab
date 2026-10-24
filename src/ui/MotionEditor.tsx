@@ -11,7 +11,8 @@ export function MotionEditor({ obj, patch }: { obj: SceneObject; patch: (p: Part
     inertia: [1, 1, 1] as [number, number, number],
     velocity: obj.kind === 'particle' ? obj.velocity : [0, 0, 0] as [number, number, number],
     angularVelocity: [0, 0, 0] as [number, number, number] };
-  const forceModel = ['charge', 'chargedSphere', 'particle', 'conductor'].includes(obj.kind);
+  const forceModel = ['charge', 'chargedSphere', 'particle', 'conductor'].includes(obj.kind)
+    || (obj.kind === 'wire' || obj.kind === 'loop' || obj.kind === 'coil') && obj.electricalModel === 'conducting';
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {

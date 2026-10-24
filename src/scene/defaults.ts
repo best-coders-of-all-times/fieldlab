@@ -150,6 +150,8 @@ export function makeWire(points: Vec3[] = [[-0.3, 0, 0], [0.3, 0, 0]], current =
   return {
     ...base('wire', 'Current wire', [0, 0, 0]),
     kind: 'wire',
+    electricalModel: 'impressed',
+    conductivity: 0.01,
     points: points.map((p) => [...p] as Vec3),
     current,
     wireRadius: 0.008,
@@ -161,6 +163,8 @@ export function makeLoop(position: Vec3 = [0, 0, 0], radius = 0.2, current = 1):
   return {
     ...base('loop', 'Current loop', position),
     kind: 'loop',
+    electricalModel: 'impressed',
+    conductivity: 0.01,
     radius,
     current,
     wireRadius: 0.008,
@@ -172,6 +176,8 @@ export function makeCoil(position: Vec3 = [0, 0, 0], radius = 0.09, length = 0.4
   return {
     ...base('coil', 'Solenoid', position),
     kind: 'coil',
+    electricalModel: 'impressed',
+    conductivity: 0.01,
     radius,
     length,
     turns,

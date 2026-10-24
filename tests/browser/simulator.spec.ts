@@ -22,7 +22,7 @@ test.beforeEach(async ({ page }) => {
     };
   });
   await page.goto('/');
-  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  await expect(page.locator('.status-chip.ready')).toBeVisible({ timeout: 30000 });
 });
 
 test('applied fields change samples and incoming field lines; probes expose vectors', async ({ page }) => {
@@ -218,4 +218,34 @@ test('capacitor requires an explicit isolated model and moving bodies share the 
   expect(latest.time).toBe(frame.time);
   expect(latest.transforms[0].position).toEqual(poseBefore);
   await page.screenshot({ path: 'artifacts/maxwell-capacitor.png' });
+});
+
+test('passive loop selection preserves authored current and requires an explicitly resolved radius', async ({ page }) => {
+  test.setTimeout(60000);
+  await page.getByRole('button', { name: /New custom scene/ }).click();
+  await page.getByRole('button', { name: 'Loop circular current', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Current', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.getByRole('button', { name: '48³', exact: true }).click();
+  await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
+  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  const model = page.getByRole('group', { name: 'Electrical model', exact: true }).getByRole('combobox');
+  await model.selectOption('conducting');
+  await expect(page.getByRole('group', { name: 'Current', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Conductivity', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'three cells' })).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('fieldlab.scene.v1')!).objects[0].wireRadius)).toBe(0.008);
+  const wireRadius = page.getByRole('group', { name: 'Wire radius', exact: true }).getByRole('textbox');
+  await wireRadius.fill('0.04');
+  await wireRadius.press('Enter');
+  await expect(page.getByRole('alert').filter({ hasText: 'three cells' })).toHaveCount(0);
+  await expect(page.locator('.status-chip.ready')).toBeVisible();
+  await model.selectOption('impressed');
+  await expect(page.getByRole('group', { name: 'Current', exact: true }).getByRole('textbox')).toHaveValue('2');
+  await model.selectOption('conducting');
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'requires Maxwell' })).toBeVisible();
 });

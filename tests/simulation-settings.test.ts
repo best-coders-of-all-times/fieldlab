@@ -1,12 +1,19 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { restoreScene } from '../src/app/restoreScene';
 import { useAppStore } from '../src/app/store';
-import { defaultSimulation, makeScene, makeConductor } from '../src/scene/defaults';
+import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil } from '../src/scene/defaults';
 
 const initial = useAppStore.getState();
 afterEach(() => useAppStore.setState(initial, true));
 
 describe('simulation model migration', () => {
+  it.each([makeWire(), makeLoop(), makeCoil()])('starts a new $kind as an impressed source and preserves an explicit passive model on save', object => {
+    expect(object.electricalModel).toBe('impressed');
+    expect(object.conductivity).toBe(0.01);
+    const saved = makeScene({ name: 'passive', objects: [{ ...object, electricalModel: 'conducting', conductivity: 0.025 }] });
+    const restored = restoreScene(JSON.parse(JSON.stringify(saved)), makeScene({ name: 'base' }))!;
+    expect(restored.objects[0]).toMatchObject({ electricalModel: 'conducting', conductivity: 0.025, current: object.current, wireRadius: object.wireRadius });
+  });
   it('keeps legacy saves in approximation mode even when importing into a full Maxwell scene', () => {
     const base = makeScene({ name: 'Maxwell' });
     base.simulation.useApproximation = false;

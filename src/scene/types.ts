@@ -86,6 +86,8 @@ export interface DielectricObject extends SceneObjectBase {
 
 export interface WireObject extends SceneObjectBase {
   kind: 'wire';
+  electricalModel?: 'impressed' | 'conducting';
+  conductivity?: number; // S/m for passive Maxwell material; default 0.01
   points: Vec3[]; // local coordinates
   current: number; // A
   wireRadius: number; // m
@@ -95,6 +97,8 @@ export interface WireObject extends SceneObjectBase {
 
 export interface LoopObject extends SceneObjectBase {
   kind: 'loop';
+  electricalModel?: 'impressed' | 'conducting';
+  conductivity?: number; // S/m for passive Maxwell material; default 0.01
   radius: number;
   current: number;
   wireRadius: number;
@@ -103,6 +107,8 @@ export interface LoopObject extends SceneObjectBase {
 
 export interface CoilObject extends SceneObjectBase {
   kind: 'coil';
+  electricalModel?: 'impressed' | 'conducting';
+  conductivity?: number; // S/m for passive Maxwell material; default 0.01
   radius: number;
   length: number;
   turns: number;

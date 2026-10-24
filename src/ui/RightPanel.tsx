@@ -258,9 +258,7 @@ function ObjectPhysics({
   if (isWire(obj)) {
     return (
       <PanelSection title="Current wire">
-        <Field label="Current">
-          <NumberInput value={obj.current} step={0.5} unit="A" onChange={(v) => patch({ current: v })} />
-        </Field>
+        <FilamentElectrical obj={obj} patch={patch} />
         <Field label="Wire radius">
           <NumberInput value={obj.wireRadius} step={0.002} unit="m" onChange={(v) => patch({ wireRadius: Math.max(0.001, v) })} />
         </Field>
@@ -278,7 +276,7 @@ function ObjectPhysics({
           const end = obj.points.at(-1) ?? [0, 0, 0];
           patch({ points: [...obj.points, [end[0] + 0.05, end[1] + 0.05, end[2]]] });
         }}>Add control point</Button>
-        <div className="note">{fullMaxwell ? 'Impressed filament current in the authored direction. This source is externally driven; it is not a passive circuit with induction feedback.' : 'B is integrated with Biot–Savart over the filament. Current direction is from the first point to the last.'}</div>
+        <div className="note">{fullMaxwell ? obj.electricalModel === 'conducting' ? 'Current evolves in the resolved finite-conductivity wire; the stored impressed-current value is retained for switching back and is not applied.' : 'Impressed filament current in the authored direction. This source is externally driven; select passive finite conductivity for induced-current feedback.' : 'B is integrated with Biot–Savart over impressed filaments. Current direction is from the first point to the last.'}</div>
       </PanelSection>
     );
   }
@@ -288,9 +286,7 @@ function ObjectPhysics({
         <Field label="Radius">
           <NumberInput value={obj.radius} step={0.01} unit="m" onChange={(v) => patch({ radius: Math.max(0.01, v) })} />
         </Field>
-        <Field label="Current">
-          <NumberInput value={obj.current} step={0.5} unit="A" onChange={(v) => patch({ current: v })} />
-        </Field>
+        <FilamentElectrical obj={obj} patch={patch} />
         <Field label="Wire radius">
           <NumberInput value={obj.wireRadius} step={0.002} unit="m" onChange={(v) => patch({ wireRadius: Math.max(0.001, v) })} />
         </Field>
@@ -310,8 +306,9 @@ function ObjectPhysics({
         <Field label="Turns">
           <Slider value={obj.turns} min={1} max={40} step={1} format={(v) => `${Math.round(v)}`} onChange={(v) => patch({ turns: Math.round(v) })} />
         </Field>
-        <Field label="Current">
-          <NumberInput value={obj.current} step={0.5} unit="A" onChange={(v) => patch({ current: v })} />
+        <FilamentElectrical obj={obj} patch={patch} />
+        <Field label="Wire radius">
+          <NumberInput value={obj.wireRadius} step={0.002} min={0.001} unit="m" onChange={wireRadius => patch({ wireRadius })} />
         </Field>
       </PanelSection>
     );
@@ -459,12 +456,38 @@ function ObjectPhysics({
   return null;
 }
 
+function FilamentElectrical({ obj, patch }: {
+  obj: Extract<SceneObject, { kind: 'wire' | 'loop' | 'coil' }>;
+  patch: (p: Partial<SceneObject>) => void;
+}) {
+  const scene = useAppStore(s => s.scene);
+  const fullMaxwell = scene.simulation.useApproximation === false;
+  const passive = obj.electricalModel === 'conducting';
+  const longest = Math.max(...scene.domain.size);
+  const maxSpacing = Math.max(...scene.domain.size.map(size => size / Math.max(8, Math.round(scene.simulation.resolution * size / longest))));
+  const minimumRadius = 1.5 * maxSpacing;
+  return <>
+    {(fullMaxwell || passive) && <Field label="Electrical model">
+      <Select value={obj.electricalModel ?? 'impressed'} options={[
+        { value: 'impressed', label: 'Impressed current (external drive)' },
+        { value: 'conducting', label: 'Passive finite conductivity' },
+      ]} onChange={electricalModel => patch({ electricalModel })} />
+    </Field>}
+    {passive ? <>
+      <Field label="Conductivity"><NumberInput value={obj.conductivity ?? 0.01} min={0} step={0.001} unit="S/m" onChange={conductivity => patch({ conductivity })} /></Field>
+      {!fullMaxwell && <div className="note warn" role="alert">Passive finite conductivity requires Maxwell mode. Disable Use approximation in Solve or choose impressed current.</div>}
+      {fullMaxwell && obj.wireRadius < minimumRadius && <div className="note warn" role="alert">Passive wire diameter must span at least three cells. This grid requires radius ≥ {formatSci(minimumRadius, 4)} m. Increase the authored radius or resolution; geometry is never automatically enlarged.</div>}
+      <div className="note">The passive material responds to the evolving fields. The previous impressed-current value remains saved but is not a passive initial current or a voltage feed. General circuit and energy/momentum validation remains incomplete.</div>
+    </> : <Field label="Current"><NumberInput value={obj.current} step={0.5} unit="A" onChange={current => patch({ current })} /></Field>}
+  </>;
+}
+
 function objectHelp(obj: SceneObject, fullMaxwell: boolean): string {
   if (fullMaxwell) {
     if (isConductor(obj)) return 'Finite conductivity with transported free charge and a local rest-frame material response. Choose the explicit isolated initial-charge model in Solve.';
     if (isParticle(obj)) return 'A source particle deposits charge and current into evolved Maxwell fields. A finite numerical charge shape is not a continuum point-particle self-force model.';
     if (isMagnet(obj)) return 'Impressed magnetization source. Moving or force-driven magnet models require explicit solver support.';
-    if (isWire(obj) || isLoop(obj) || isCoil(obj)) return 'Externally imposed current; not a passive induction-feedback circuit. Unsupported motion or force coupling is reported by the solver.';
+    if (isWire(obj) || isLoop(obj) || isCoil(obj)) return obj.electricalModel === 'conducting' ? 'Resolved finite-conductivity passive material with evolving charge/current. Its wire diameter must span at least three cells; this is an experimental material model, not a general validated circuit solver.' : 'Externally imposed current. Choose passive finite conductivity for material-current feedback. Unsupported motion or force coupling is reported by the solver.';
     if (isProbe(obj)) return 'Passive E/B sampler. A unique electrostatic scalar potential is not available for the full time-dependent electric field.';
   }
   if (isConductor(obj)) return 'In statics, this object is a Dirichlet region in the Poisson solve. In waves it is a perfect electric conductor (E=0 inside).';
@@ -819,12 +842,13 @@ function MeasurePanel() {
       {fullMaxwell && <PanelSection title="Maxwell diagnostics">
         {[
           ['steps', 'Physical steps'], ['stepsPerSecond', 'Measured steps / second'],
-          ['gaussRelative', 'Relative Gauss residual'], ['divergenceE', 'Electric divergence residual'],
+          ['gaussRelative', 'Relative Gauss residual'], ['divergenceE', 'Absolute electric Gauss residual'],
           ['divergenceB', 'Magnetic divergence residual'], ['charge', 'Total charge (C)'],
-          ['totalEnergy', 'Field energy (J)'], ['ohmicLoss', 'Ohmic loss (J)'],
-          ['sourceWork', 'Source work (J)'], ['mechanicalWork', 'Mechanical work (J)'],
+          ['totalEnergy', 'Field energy (J)'], ['ohmicLoss', 'Stationary material loss (J)'],
+          ['sourceWork', 'Applied-current work (J)'], ['conductorLoss', 'Body heat estimate (J)'],
+          ['mechanicalWork', 'Rigid linear work, partial (J)'],
         ].map(([key, label]) => <div className="stat-line" key={key}><span>{label}</span><b>{measurements.extra?.[key] !== undefined ? formatSci(measurements.extra[key], 4) : '—'}</b></div>)}
-        <div className="note">Residuals and budgets describe the selected discrete model. Resolution, domain, boundary and initialization refinement are still required for a physical conclusion.</div>
+        <div className="note">Relative Gauss residual uses the current charge and D/Δx scales. Applied-current work includes deposited conduction and bound currents as well as impressed sources. Stationary material loss, body heat and partial rigid linear work are separate diagnostics; they are not a closed energy/momentum ledger. Check resolution, domain, boundaries and initialization.</div>
       </PanelSection>}
 
       {inductionTelemetry.length > 0 && (
