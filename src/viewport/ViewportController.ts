@@ -413,7 +413,6 @@ export class ViewportController {
   private clearInduction(): void {
     this.lastMotion.clear();
     for (const obj of this.sceneData?.objects ?? []) {
-      if (!obj.motion) continue;
       const view = this.views.get(obj.id);
       if (!view) continue;
       view.group.position.set(...obj.position);

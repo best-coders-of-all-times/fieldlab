@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { makeCharge, makeScene } from '../src/scene/defaults';
+import { makeCharge, makeScene, makeLoop } from '../src/scene/defaults';
 import { useAppStore } from '../src/app/store';
 import { SimulationController } from '../src/app/controller';
 
@@ -28,5 +28,17 @@ it('invalidates old Maxwell replies immediately while expensive edits are deboun
   vi.advanceTimersByTime(170);
   expect(workers).toHaveLength(2);
   expect(workers[1].messages[0].scene.objects[0].position).toEqual([0.1, 0, 0]);
+  controller.dispose();
+});
+
+it('reports unsupported passive material in approximation mode without using impressed current', () => {
+  const loop = makeLoop(); loop.electricalModel = 'conducting';
+  const scene = makeScene({ name: 'passive', objects: [loop] });
+  const workers: unknown[] = [];
+  vi.stubGlobal('Worker', class { constructor() { workers.push(this); } postMessage() {} terminate() {} });
+  const controller = new SimulationController(); controller.update(scene, false);
+  expect(useAppStore.getState().status.phase).toBe('error');
+  expect(useAppStore.getState().status.message).toMatch(/passive|Maxwell/i);
+  expect(workers).toHaveLength(0);
   controller.dispose();
 });

@@ -143,6 +143,12 @@ export class SimulationController {
     useAppStore.getState().setFdtdMeta(null);
     useAppStore.setState({ measurements: {} });
 
+    if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && (o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil') && o.electricalModel === 'conducting')) {
+      this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
+      this.fail('Passive conducting wires require Maxwell mode. Disable “Use approximation”, or explicitly choose an impressed-current source.');
+      return;
+    }
+
     if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && o.dynamics?.mode === 'forceDriven')) {
       this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
       this.fail('Force-driven source bodies require Maxwell mode. Disable “Use approximation”, or choose fixed/prescribed motion. Legacy test particles remain available without a body dynamics override.');

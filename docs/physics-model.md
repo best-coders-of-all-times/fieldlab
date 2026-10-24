@@ -45,12 +45,16 @@ Initialization prepares electrostatic E/charge with finite-domain boundary/elect
 | --- | --- | --- |
 | Point charge / source particle | Grid-scale cloud-in-cell charge and conserved trajectory current; prescribed or field-driven motion | Finite shape, not continuum point self-force or separate radiation reaction. Closed deposition-domain exits are rejected. |
 | Sphere/shell | Distributed charge samples: four radial shells for a solid, 48 angular samples per shell | Quadrature and grid require refinement; no analytic sphere formula during Maxwell evolution. |
-| Wire/loop/coil | Stationary impressed filament current; its deposited divergence evolves endpoint charge | Externally powered, not a passive terminal/return network. Moving filaments are rejected. |
+| Wire/loop/coil | Stationary impressed current, or explicitly selected resolved passive conducting material | Passive wires share the finite-conductivity body model. Diameter must span three cells; no automatic enlargement or separate-body electrical contact. Impressed filaments cannot move. |
 | Electric point source / antenna | Current deposition; amplitude in amperes | Magnetic point-current components and moving driven sources are rejected; no general calibrated port. |
 | Plane-wave gadget | Fixed x-normal current sheet; amplitude specifies an E scale; radiates both ways | Authored +x sheet orientation only, not a one-way TFSF source. |
 | Stationary dielectric | Staircased linear epsilon_r, mu_r and conductivity | No dispersion, hysteresis or general moving constitutive response; moving dielectrics are rejected. |
 | Conductor | Initialized isolated charge, finite conductivity and transported body-owned charge | Not a moving PEC, voltage supply or validated arbitrary moving interface. |
 | Permanent magnet | Prescribed laboratory-shape impressed polarization/magnetization, including motion | No force-driven magnet, rest-shape contraction, hysteresis or internal magnetic relaxation. |
+
+### Open initial fields
+
+For fully absorbing boundaries and the open electrostatic selector, preparation now solves a self-consistent Coulomb outer potential, including induced electrode charge and dielectric polarization. A restarted GMRES boundary solve wraps the compatible interior Poisson operator; its true residual must converge. Floating-electrode background and unit-voltage solves use that same operator. The charge-independent quadrupole tree has a separate spatial error: the default opening criterion measured maximum normalized error 8.2e-5 on the documented neutral test cloud. This is a one-time numerical initial solve; playback never reapplies electrostatics. PEC walls and explicitly grounded preparation retain their physical finite-boundary conditions. Mixed PEC/PML initialization is not a general free-space Green solve.
 
 ### Isolated finite-conductivity electrodes
 
@@ -74,7 +78,7 @@ This is an externally maintained source, not a globally Lorentz-contracted rigid
 
 ### Force-driven motion
 
-Fixed mode represents an external support; prescribed mode represents a mechanical drive. Authored initial data survives mode changes. Point charges/source particles use a relativistic staggered momentum pusher, field gather and conserved trajectory current on the field dt. Existing particle mass/velocity supplies initial data unless explicitly overridden.
+Fixed mode represents an external support; prescribed mode represents a mechanical drive. Authored initial data survives mode changes. Point charges/source particles use a relativistic staggered momentum pusher, field gather and conserved trajectory current on the field dt. Existing particle mass/velocity supplies initial data unless explicitly overridden. Prescribed mode without a trajectory stays at the authored initial pose; inactive stored velocities do not affect fixed or prescribed bodies. The force gather averages edge E and synchronized face B onto charge nodes, then uses the same CIC weights as charge deposition. A stationary isolated charge regression checks that its own mesh field does not cause artificial acceleration. This gather differs from a point probe, which interpolates each native Yee component directly.
 
 Charged spheres and finite-conductivity bodies use experimental classical rigid-body force/torque integration, mass, principal inertia and initial linear/angular velocity. Translation beyond `0.01c` is rejected for that mechanics model. Controls do not establish a validated relativistic extended-body or isolated-body momentum model. Complete field/body/source/support energy and momentum accounting, prescribed-drive work and general self-force convergence remain incomplete. Individual work/loss diagnostics are not a closed global ledger.
 
@@ -110,4 +114,4 @@ Poisson and both FDTD paths already run in local browser Web Workers. Legacy app
 
 That selected charge benchmark's normalized Gauss residual is below `3e-15`. These errors apply to its history, finite-grid shape, point, time and boundary setup away from the source. They are not universal sub-percent claims. Abrupt starts produced unresolved ringing and are not interchangeable with this ramped benchmark.
 
-Replay/browser tests check authored-data preservation, worker generations, frame/probe/pose timing, explicit conductor setup and readouts. They do not establish physical correctness merely from finite fields or visible B. Moving PEC/mirror validation, general moving media, explicit voltage feeds, passive induction circuits, a closed energy/momentum ledger and CPU/WebGPU parity remain outstanding plan requirements.
+Replay/browser tests check authored-data preservation, worker generations, frame/probe/pose timing, explicit conductor setup and readouts. They do not establish physical correctness merely from finite fields or visible B. Moving PEC/mirror validation, general moving media, explicit voltage feeds, quantitative passive-circuit feedback, a closed energy/momentum ledger and CPU/WebGPU parity remain outstanding plan requirements.

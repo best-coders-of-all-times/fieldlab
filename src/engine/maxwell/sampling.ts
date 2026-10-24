@@ -37,6 +37,23 @@ export class MaxwellSampler {
     return { E, B, Emag: Math.hypot(...E), Bmag: Math.hypot(...B) };
   }
 
+  /** Force on the finite CIC cloud, rather than a point probe. Center each
+   * component at charge nodes before applying the same CIC shape as deposition.
+   * Pairing the symmetric source shape with a centered antisymmetric gradient
+   * cancels electrostatic mesh self-force in homogeneous space. Boundary and
+   * material reaction forces remain. Probe interpolation is unchanged.
+   */
+  sampleForForce(p: Vec3) {
+    const s = this.core, shape = [s.nx, s.ny, s.nz], strides = [1, s.nx, s.nx * s.ny];
+    const previous = (c: number, a: number) => Math.floor(c / strides[a]) % shape[a] ? c - strides[a] : c + (shape[a] - 1) * strides[a];
+    const E = [s.Ex, s.Ey, s.Ez].map((e, a) => this.interpolate(p, [0, 0, 0], c => (e[c] + e[previous(c, a)]) / 2)) as Vec3;
+    const B = [0, 1, 2].map(a => this.interpolate(p, [0, 0, 0], c => {
+      const b = (a + 1) % 3, d = (a + 2) % 3, cb = previous(c, b), cd = previous(c, d);
+      return (this.synchronizedB(a, c) + this.synchronizedB(a, cb) + this.synchronizedB(a, cd) + this.synchronizedB(a, previous(cb, d))) / 4;
+    })) as Vec3;
+    return { E, B };
+  }
+
   sample(p: Vec3): FdtdSample & { D: Vec3; J: Vec3; rho: number; energyE: number; energyB: number } {
     const s = this.core, es = [s.Ex, s.Ey, s.Ez], eps = [s.epsX, s.epsY, s.epsZ];
     const mus = [s.muX, s.muY, s.muZ], js = [s.Jx, s.Jy, s.Jz];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MaxwellSceneSolver } from '../../src/engine/maxwell/sceneSolver';
-import { makeScene, makeCharge, makeChargedSphere, makeConductor, makeProbe, makeMagnet, makeDielectric, makePlaneWave } from '../../src/scene/defaults';
+import { makeScene, makeCharge, makeChargedSphere, makeConductor, makeProbe, makeMagnet, makeDielectric, makePlaneWave, makeLoop, makeParticle } from '../../src/scene/defaults';
 
 function chargedScene() {
   const scene = makeScene({ name: 'charge', objects: [makeCharge([0, 0, 0], 1e-10), makeProbe([0.2, 0, 0])] });
@@ -144,4 +144,116 @@ describe('Scene Maxwell solver', () => {
     solver.step(10);
     expect(solver.diagnostics().gaussRelative).toBeLessThan(1e-8);
   });
+
+  it('does not inject the retained impressed current into a passive loop', () => {
+    const scene = chargedScene(), loop = makeLoop([0, 0, 0], 0.2, 17);
+    Object.assign(loop, { electricalModel: 'conducting', conductivity: 0.01, wireRadius: 0.1 });
+    scene.objects = [loop];
+    const solver = new MaxwellSceneSolver(scene); solver.step();
+    expect(solver.core.Jx.every(v => v === 0)).toBe(true);
+    expect(solver.core.Jy.every(v => v === 0)).toBe(true);
+    expect(solver.energy().electric).toBe(0);
+  });
+
+  it('drives passive loop current against increasing magnet flux', () => {
+    const scene = chargedScene(), loop = makeLoop([0, 0, 0], 0.25, 0), magnet = makeMagnet();
+    Object.assign(loop, { electricalModel: 'conducting', conductivity: 0.01, wireRadius: 0.1 });
+    magnet.radius = 0.07; magnet.length = 0.2; magnet.magnetization = 10;
+    scene.objects = [loop, magnet];
+    const solver = new MaxwellSceneSolver(scene);
+    let minimumCurrent = 0;
+    for (let n = 0; n < 16; n++) {
+      solver.step(); minimumCurrent = Math.min(minimumCurrent, solver.sample([0.25, 0, 0]).J[1]);
+    }
+    expect(minimumCurrent).toBeLessThan(-1e-5);
+    expect(solver.diagnostics().conductorLoss).toBeGreaterThan(0);
+    expect(solver.diagnostics().gaussRelative).toBeLessThan(1e-8);
+  });
+
+  it('does not accelerate an isolated resting CIC charge from its own mesh field', () => {
+    const scene = chargedScene(), charge = makeCharge([0.01, 0, 0], 1e-10);
+    charge.dynamics = { mode: 'forceDriven', mass: 1e-20, inertia: [1, 1, 1], velocity: [0, 0, 0], angularVelocity: [0, 0, 0] };
+    scene.objects = [charge];
+    const solver = new MaxwellSceneSolver(scene); solver.step();
+    // Finite preparation boundaries leave a small, separately convergent
+    // reaction. The unpaired point gather produced about 39 m/s here.
+    expect(Math.hypot(...solver.bodies.get(charge.id)!.velocity)).toBeLessThan(1e-3);
+  });
+
+  it('prepares static charge consistently with PEC walls', () => {
+    const scene = chargedScene();
+    scene.objects = [makeCharge([0.12, 0.07, 0], 1e-10)];
+    scene.simulation.boundary = { x: 'pec', y: 'pec', z: 'pec' };
+    scene.simulation.staticBoundary = 'open';
+    const solver = new MaxwellSceneSolver(scene); solver.step(10);
+    expect(solver.sample([0.2, 0, 0]).Bmag).toBeLessThan(1e-17);
+  });
+
+  it('rejects explicit material damping that violates the combined wave/current stability limit', () => {
+    const scene = chargedScene(), conductor = makeConductor();
+    conductor.conductivity = 0.02; scene.objects = [conductor];
+    scene.simulation.maxwellConductorModel = 'isolated'; scene.simulation.cfl = 0.99;
+    expect(() => new MaxwellSceneSolver(scene)).toThrow(/stiff|stability|timestep/i);
+  });
+  it('keeps an explicitly prescribed particle stationary without a trajectory', () => {
+    const scene = chargedScene(), particle = makeParticle([0, 0, 0], 'electron', [1e6, 0, 0]);
+    particle.dynamics = { mode: 'prescribed', mass: particle.mass, inertia: [1, 1, 1], velocity: [2e6, 0, 0], angularVelocity: [0, 0, 0] };
+    scene.objects = [particle];
+    const solver = new MaxwellSceneSolver(scene); solver.step(2);
+    expect(solver.pose(particle).position).toEqual(particle.position);
+  });
+
+  it('ignores inactive stored velocities on fixed particles', () => {
+    const scene = chargedScene(), particle = makeParticle([0, 0, 0], 'electron', [4e8, 0, 0]);
+    particle.dynamics = { mode: 'fixed', mass: particle.mass, inertia: [1, 1, 1], velocity: [4e8, 0, 0], angularVelocity: [0, 0, 0] };
+    scene.objects = [particle];
+    const solver = new MaxwellSceneSolver(scene); solver.step();
+    expect(solver.pose(particle).position).toEqual(particle.position);
+  });
+
+  it('rejects overlapping passive material before unstable currents are added', () => {
+    const scene = chargedScene(), a = makeLoop([0, 0, 0], 0.2, 0), b = makeLoop([0, 0, 0], 0.2, 0);
+    for (const loop of [a, b]) Object.assign(loop, { electricalModel: 'conducting', conductivity: 0.027, wireRadius: 0.15 });
+    scene.objects = [a, b]; scene.simulation.externalField = [0, 1, 0];
+    expect(() => { const solver = new MaxwellSceneSolver(scene); solver.step(); }).toThrow(/overlap|contact/i);
+  });
+
+  it('includes faster material wave speed in the explicit conduction stability guard', () => {
+    const scene = chargedScene(), loop = makeLoop([0, 0, 0], 0.2, 0), medium = makeDielectric();
+    Object.assign(loop, { electricalModel: 'conducting', conductivity: 0.027, wireRadius: 0.15 });
+    medium.muR = 0.9; medium.epsilonR = 1; medium.size = [0.9, 0.9, 0.9];
+    scene.objects = [loop, medium];
+    expect(() => new MaxwellSceneSolver(scene)).toThrow(/stiff|stability|timestep/i);
+  });
+
+  it('uses force-driven particle motion even when an inactive trajectory is saved', () => {
+    const scene = chargedScene(), particle = makeParticle();
+    particle.dynamics = { mode: 'forceDriven', mass: particle.mass, inertia: [1, 1, 1], velocity: [1e6, 0, 0], angularVelocity: [0, 0, 0] };
+    particle.motion = { kind: 'oscillate', axis: [0, 1, 0], amplitude: 0.02, frequency: 1e7 };
+    scene.objects = [particle];
+    const solver = new MaxwellSceneSolver(scene); solver.step();
+    expect(solver.pose(particle).position[0]).toBeCloseTo(1e6 * solver.core.dt, 10);
+    expect(solver.pose(particle).position[1]).toBe(0);
+  });
+
+  it('solves an open floating electrode with its requested owned charge', () => {
+    const scene = chargedScene(), conductor = makeConductor([0, 0, 0], 'sphere', [0.25, 0.25, 0.25]);
+    conductor.floating = true; conductor.netCharge = 1e-10; scene.objects = [conductor];
+    scene.simulation.maxwellConductorModel = 'isolated';
+    const solver = new MaxwellSceneSolver(scene);
+    const diagnostics = solver.diagnostics();
+    expect(diagnostics.openBoundaryResidual).toBeLessThan(1e-7);
+    expect(diagnostics.openBoundaryIterations).toBeGreaterThan(0);
+    expect(diagnostics.charge).toBeCloseTo(conductor.netCharge, 18);
+    solver.step(8);
+    expect(solver.sample([0.25, 0, 0]).Bmag).toBeLessThan(1e-16);
+  });
+
+  it('rejects an isolated electrode touching a PEC wall without an electrical contact model', () => {
+    const scene = chargedScene(), conductor = makeConductor([0.375, 0, 0], 'box', [0.25, 0.25, 0.25]);
+    conductor.potential = 3; scene.objects = [conductor]; scene.simulation.maxwellConductorModel = 'isolated';
+    scene.simulation.boundary.x = 'pec';
+    expect(() => new MaxwellSceneSolver(scene)).toThrow(/contact|PEC|wall/i);
+  });
+
 });

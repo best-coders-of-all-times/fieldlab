@@ -85,7 +85,7 @@ Sampling is timed once per operation after stepping, without changing the field 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 ${report.results.map(r => `| ${r.resolution} | ${n(r.samplingMs.slice)} | ${n(r.samplingMs.probes)} | ${n(r.samplingMs.arrows)} | ${n(r.samplingMs.lines)} | ${n(r.samplingMs.diagnostics)} | ${r.framePayload.explicitTransferBytes} | ${r.framePayload.lineArrayBytes} |`).join('\n')}
 
-Explicit transfer bytes count the slice and lattice ArrayBuffers listed in the current worker transfer list. Line buffer bytes count the typed arrays currently sent through structured clone, separately. Probe JSON byte counts in the JSON artifact are UTF-8 serialization sizes for comparison, not measured worker wire sizes. Metadata and JavaScript object overhead are excluded from the table. Retained buffers are unique reachable ArrayBuffers in the solver after stepping; they exclude temporary allocations, JavaScript heap objects, browser rendering storage and process overhead. The solver's conservative admission estimate is reported separately from that count; the current allocation guard is 768 MiB.
+Explicit transfer bytes count slice, lattice and field-line ArrayBuffers in the worker transfer list. Line buffer bytes are the field-line subset of that total; they are transferred rather than copied by structured clone. Probe JSON byte counts in the JSON artifact are UTF-8 serialization sizes for comparison, not measured worker wire sizes. Metadata and JavaScript object overhead are excluded from the table. Retained buffers are unique reachable ArrayBuffers in the solver after stepping; they exclude temporary allocations, JavaScript heap objects, browser rendering storage and process overhead. The solver's conservative admission estimate is reported separately from that count; the current allocation guard is 768 MiB.
 
 Node executes this benchmark on the calling thread. The browser runs the solver in a dedicated worker, with additional message scheduling, structured cloning, transferred-buffer handling, Three.js rendering and UI work. This benchmark does not measure those costs or certify UI responsiveness. JIT compilation, garbage collection, CPU load, power management and browser engine differences can change results; use repeated browser and worker measurements for capacity planning. The short run is a smoke benchmark, not a statistically stable throughput estimate or a peak-memory measurement.
 
@@ -98,7 +98,7 @@ Reproduce with ${quote}npm run bench:maxwell -- --json artifacts/maxwell-benchma
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) { console.log(help); return; }
-  const server = await createServer({ root: projectRoot, configFile: false, server: { middlewareMode: true }, appType: 'custom', logLevel: 'error' });
+  const server = await createServer({ root: projectRoot, configFile: false, server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true }, appType: 'custom', logLevel: 'error' });
   try {
     const [{ MaxwellSceneSolver }, { makeScene, makeConductor, makeProbe }] = await Promise.all([
       server.ssrLoadModule('/src/engine/maxwell/sceneSolver.ts'),
@@ -123,14 +123,15 @@ async function main() {
       const arrows = timed(() => solver.sampleLattice(settings.arrowDensity, 'E'));
       const lines = timed(() => solver.fieldLines('E', settings.lineSeeds));
       const diagnostics = timed(() => solver.diagnostics());
-      const explicitTransferBytes = slice.value.data.byteLength + arrows.value.positions.byteLength + arrows.value.vectors.byteLength + arrows.value.magnitudes.byteLength;
+      const sliceLatticeBytes = slice.value.data.byteLength + arrows.value.positions.byteLength + arrows.value.vectors.byteLength + arrows.value.magnitudes.byteLength;
       const lineArrayBytes = lines.value.reduce((sum, line) => sum + line.points.byteLength + line.magnitudes.byteLength, 0);
+      const explicitTransferBytes = sliceLatticeBytes + lineArrayBytes;
       results.push({ resolution, grid: [solver.meta.nx, solver.meta.ny, solver.meta.nz], cells: solver.core.rho.length,
         dt: solver.meta.dt, physicalTime: solver.time, fieldSteps: solver.steps, preparationMs: preparation.ms,
         steppingMs: stepping.ms, steppingMsPerStep: stepping.ms / options.steps,
         samplingMs: { slice: slice.ms, probes: probes.ms, arrows: arrows.ms, lines: lines.ms, diagnostics: diagnostics.ms },
         retainedArrayBufferBytes: retainedBufferBytes(solver), solverEstimatedBytes: diagnostics.value.estimatedBytes, memoryBudgetBytes: 768 * 1048576,
-        processMemory: process.memoryUsage(), framePayload: { explicitTransferBytes, lineArrayBytes, totalTypedArrayBytes: explicitTransferBytes + lineArrayBytes,
+        processMemory: process.memoryUsage(), framePayload: { explicitTransferBytes, lineArrayBytes, totalTypedArrayBytes: explicitTransferBytes,
           probeJsonUtf8Bytes: Buffer.byteLength(JSON.stringify(probes.value)), actualLineCount: lines.value.length,
           linePoints: lines.value.reduce((sum, line) => sum + line.points.length / 3, 0) }, diagnostics: diagnostics.value });
       console.error(`Resolution ${resolution}: ${preparation.ms.toFixed(1)} ms preparation, ${(stepping.ms / options.steps).toFixed(1)} ms/step.`);
@@ -138,7 +139,7 @@ async function main() {
     const sourceSha256 = Object.fromEntries(await Promise.all([
       'scripts/benchmark-maxwell.mjs', 'src/engine/maxwell/sceneSolver.ts', 'src/engine/maxwell/yee.ts',
       'src/engine/maxwell/sampling.ts', 'src/engine/maxwell/cpml.ts', 'src/engine/maxwell/initialization.ts',
-      'src/engine/maxwell/deposition.ts', 'src/engine/maxwell/dynamics.ts', 'src/engine/maxwell/rigid.ts',
+      'src/engine/maxwell/deposition.ts', 'src/engine/maxwell/dynamics.ts', 'src/engine/maxwell/rigid.ts', 'src/engine/maxwell/conductingFilament.ts', 'src/engine/maxwell/magnetization.ts', 'src/engine/maxwell/materials.ts', 'src/workers/fdtd.worker.ts',
     ].map(async path => [path, createHash('sha256').update(await readFile(resolve(projectRoot, path))).digest('hex')])));
     const report = { generatedAt: new Date().toISOString(), commandArguments: process.argv.slice(2), sourceSha256,
       environment: { node: process.version, platform: platform(), release: release(), arch: arch(), cpuModel: cpus()[0]?.model ?? 'unknown', logicalCpus: cpus().length, systemMemoryBytes: totalmem() },
