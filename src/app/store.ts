@@ -361,7 +361,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (Object.entries(patch).every(([key, value]) => state.scene.simulation[key as keyof Scene['simulation']] === value)) return;
       pushHistory(state.scene, true);
       set({ scene: { ...state.scene, simulation: { ...state.scene.simulation, ...patch } } });
-      if (Object.keys(patch).some(key => key !== 'stepsPerFrame' && key !== 'timeScale')) restartRuntime(false);
+      if (Object.keys(patch).some(key => key !== 'stepsPerFrame' && key !== 'timeScale' && key !== 'targetTime')) restartRuntime(false);
     },
     togglePanel: (key) => set((state) => ({ panels: { ...state.panels, [key]: !state.panels[key] } })),
     setRightTab: (rightTab) => set({ rightTab }),

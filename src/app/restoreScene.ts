@@ -32,6 +32,7 @@ export function restoreScene(saved: unknown, base: Scene): Scene | null {
       ...(value.simulation ?? {}),
       useApproximation: value.simulation?.useApproximation ?? true,
       maxwellConductorModel: value.simulation?.maxwellConductorModel,
+      targetTime: value.simulation?.targetTime,
       boundary: {
         ...base.simulation.boundary,
         ...(value.simulation?.boundary ?? {}),

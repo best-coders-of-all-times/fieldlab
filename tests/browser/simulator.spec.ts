@@ -445,3 +445,36 @@ test('charging capacitor runs directly and ten-step rewind/replay preserves edit
   expect(replay.diagnostics[`bodyCharge:${first.feed.terminalFeed.to}`]).toEqual(first.frame.diagnostics[`bodyCharge:${first.feed.terminalFeed.to}`]);
   await page.screenshot({ path: 'artifacts/maxwell-terminal-charging.png' });
 });
+
+test('physical run target stops at a bounded grid step and extends without rewinding edited fields', async ({ page }) => {
+  test.setTimeout(90000);
+  await page.getByRole('button', { name: /Maxwell: charging capacitor/ }).click();
+  await page.getByRole('button', { name: 'Pause (space)', exact: true }).click();
+  await expect(page.locator('.status-chip.ready')).toBeVisible({ timeout: 30000 });
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.getByRole('group', { name: 'Steps per frame', exact: true }).getByRole('slider').fill('12');
+  await page.locator('.check-row').filter({ hasText: 'Stop at physical time' }).getByRole('switch').click();
+  const target = page.getByRole('group', { name: 'Target physical time', exact: true }).getByRole('textbox');
+  const dt = await page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1).meta.dt);
+  await target.fill(String(2.5 * dt)); await target.press('Enter');
+  await page.getByRole('button', { name: 'Rewind to t = 0', exact: true }).click();
+  await expect(page.locator('.status-chip.ready')).toBeVisible({ timeout: 30000 });
+  await page.getByRole('button', { name: 'Play (space)', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1)?.steps)).toBe(3);
+  await expect(page.getByRole('button', { name: 'Play (space)', exact: true })).toBeVisible();
+  const stopped = await page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1));
+  await page.getByRole('button', { name: 'Single step', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1)?.steps)).toBe(3);
+  await target.fill(String(5 * dt)); await target.press('Enter');
+  await page.getByRole('button', { name: 'Single step', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1)?.steps)).toBe(5);
+  const extended = await page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1));
+  expect(extended.generation).toBe(stopped.generation);
+  expect(extended.time).toBeCloseTo(5 * dt, 20);
+  await expect(page.locator('.stat-line').filter({ hasText: 'Remaining physical steps' })).toContainText('0');
+  await page.getByRole('button', { name: 'Replay', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Play (space)', exact: true })).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1)?.steps)).toBe(5);
+  const replay = await page.evaluate(() => (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1));
+  expect(replay.probes).toEqual(extended.probes); expect(replay.energy).toEqual(extended.energy);
+});

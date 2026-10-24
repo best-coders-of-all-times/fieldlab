@@ -130,6 +130,8 @@ export interface FdtdFrame {
   transforms?: MotionTransform[];
   lines?: { field: 'E' | 'B'; lines: FieldLineData[] };
   diagnostics?: Record<string, number>;
+  /** Full-Maxwell physical target reached at the first applicable grid step. */
+  targetReached?: boolean;
 }
 
 export type FdtdRequest =

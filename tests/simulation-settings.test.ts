@@ -103,4 +103,16 @@ describe('simulation model migration', () => {
     expect(after.resetRequest).toBe(before.resetRequest);
     expect(after.measurements.electricEnergy).toBe(9);
   });
+  it('changes a saved physical target without resetting time, fields or playback', () => {
+    useAppStore.setState({ time: 4e-9, playing: true, measurements: { electricEnergy: 9 } });
+    const before = useAppStore.getState();
+    useAppStore.getState().setSimulation({ targetTime: 8e-9 });
+    const after = useAppStore.getState();
+    expect(after.time).toBe(4e-9); expect(after.playing).toBe(true);
+    expect(after.resetRequest).toBe(before.resetRequest); expect(after.measurements.electricEnergy).toBe(9);
+    expect(restoreScene(JSON.parse(JSON.stringify(after.scene)), before.scene)!.simulation.targetTime).toBe(8e-9);
+    useAppStore.getState().rewindSimulation();
+    expect(useAppStore.getState().scene.simulation.targetTime).toBe(8e-9);
+  });
+
 });

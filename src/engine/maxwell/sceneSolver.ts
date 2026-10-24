@@ -73,6 +73,9 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   private dampingRows?: Float64Array;
   private materialOhmLimit?: number;
   private feeds: TerminalSource[] = [];
+  private sourceParticleWork = 0;
+  private sourceParticleAbsoluteWork = 0;
+  private initialSourceParticleKinetic = 0;
   private motionKinematics = new Map<string, { time: number; center: Vec3; linear: Vec3; omega: Vec3 }>();
 
   constructor(scene: Scene) {
@@ -140,6 +143,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       const mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1);
       body.momentum = advanceParticle(body.position, body.momentum, -object.charge, mass, field.E, field.B, core.dt / 2).momentum;
     }
+    this.initialSourceParticleKinetic = this.sourceParticleState().kinetic;
     this.initial = core.snapshot();
     this.initialBodies = structuredClone(this.bodies);
     this.initialBodyCharge = structuredClone(this.bodyCharge);
@@ -478,6 +482,23 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     // No Biot-Savart field is added to samples during the run.
   }
 
+  private sourceParticleState() {
+    let kinetic = 0, count = 0;
+    const momentum: Vec3 = [0, 0, 0];
+    for (const object of this.scene.objects) if (object.visible && usesParticleDynamics(object) && (isCharge(object) || isParticle(object))) {
+      const body = this.bodies.get(object.id)!, mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1);
+      const field = this.sampleForForce(body.position);
+      // The integrator stores p at t-dt/2. This reversible half kick estimates
+      // integer-time momentum without altering the accepted particle state.
+      const p = advanceParticle(body.position, body.momentum, object.charge, mass, field.E, field.B, this.core.dt / 2).momentum;
+      const norm = Math.hypot(...p), gamma = Math.hypot(1, norm / (mass * C_LIGHT));
+      kinetic += norm * (norm / mass) / (gamma + 1);
+      for (let a = 0; a < 3; a++) momentum[a] += p[a];
+      count++;
+    }
+    return { kinetic, momentum, count };
+  }
+
   private advanceBodies() {
     for (const object of this.scene.objects.filter(o => o.visible)) {
       const b = this.bodies.get(object.id)!;
@@ -655,16 +676,25 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       this.assertMatterInside(this.time + s.dt);
       this.assertFeedSeparation(this.time + s.dt);
       this.transportConductors(materialBefore);
+      const particleSteps: { q: number; weights: TrajectoryWeight[]; voltage: number }[] = [];
       this.charges.forEach((charge, c) => {
         const to = localToWorld(this.pose(charge.object, this.time + s.dt), charge.local);
         const velocity = before[c].map((v, n) => (to[n] - v) / s.dt) as Vec3;
         validateSubluminalVelocity(velocity);
         depositTrajectory(s.Jx, s.Jy, s.Jz, s, this.gridPoint(before[c]), this.gridPoint(to), charge.charge, s.dt);
+        if (usesParticleDynamics(charge.object)) {
+          const weights = trajectoryWeights(s, this.gridPoint(before[c]), this.gridPoint(to)), fields = [s.Ex, s.Ey, s.Ez];
+          particleSteps.push({ q: charge.charge, weights, voltage: weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0) });
+        }
       });
       this.magnetCurrents();
       this.waveCurrents();
       s.step();
       const fields = [s.Ex, s.Ey, s.Ez];
+      for (const { q, weights, voltage } of particleSteps) {
+        const work = q / 2 * (voltage + weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0));
+        this.sourceParticleWork += work; this.sourceParticleAbsoluteWork += Math.abs(work);
+      }
       for (const { feed, q, voltage } of feedSteps) {
         const nextVoltage = feed.weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0);
         feed.sourceWork -= q * (voltage + nextVoltage) / 2;
@@ -677,6 +707,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     this.bodyCharge = structuredClone(this.initialBodyCharge);
     for (const lattice of this.lattices.values()) lattice.charge.set(lattice.initialCharge);
     this.motionKinematics.clear();
+    this.sourceParticleWork = 0; this.sourceParticleAbsoluteWork = 0;
     for (const feed of this.feeds) { feed.transferredCharge = 0; feed.sourceWork = 0; }
     if (this.hasMagnets) {
       const sources = buildMagnetizationSources(this.scene, this.core, this.min, 0);
@@ -695,7 +726,14 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     // Initially uncharged wave scenes need a field-based normalization; a
     // near-zero initial rho alone amplifies roundoff into a false alarm.
     const gaussScale = Math.max(this.chargeScale, Math.sqrt(scale2 / Math.max(count, 1)));
-    const terminalData: Record<string, number> = {};
+    const particle = this.sourceParticleState(), kineticChange = particle.kinetic - this.initialSourceParticleKinetic;
+    const couplingResidual = kineticChange - this.sourceParticleWork;
+    const couplingScale = Math.max(Math.abs(kineticChange), this.sourceParticleAbsoluteWork, 1e-40);
+    const terminalData: Record<string, number> = {
+      sourceParticleCount: particle.count, sourceParticleKinetic: particle.kinetic, sourceParticleWork: this.sourceParticleWork,
+      sourceParticleCouplingResidual: couplingResidual, sourceParticleCouplingRelative: Math.abs(couplingResidual) / couplingScale,
+      sourceParticleMomentumX: particle.momentum[0], sourceParticleMomentumY: particle.momentum[1], sourceParticleMomentumZ: particle.momentum[2],
+    };
     for (const [id, lattice] of this.lattices) terminalData[`bodyCharge:${id}`] = lattice.charge.reduce((sum, q) => sum + q, 0);
     return { ...d, ...terminalData, feedSourceWork: this.feeds.reduce((sum, feed) => sum + feed.sourceWork, 0), feedTransferredCharge: this.feeds.reduce((sum, feed) => sum + feed.transferredCharge, 0), gaussRelative: d.divergenceE / gaussScale, gaussScale, preparationResidual: this.preparationResidual, openBoundaryResidual: this.openBoundaryResidual, openBoundaryIterations: this.openBoundaryIterations,
       mechanicalWork: this.mechanicalWork, conductorLoss: this.conductorLoss, estimatedBytes: this.core.rho.length * (1100 + (this.core.drude ? 144 : 0) + 16 * this.bodyCharge.size),

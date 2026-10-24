@@ -64,3 +64,23 @@ it('requires Maxwell mode for a saved terminal current feed', () => {
   expect(useAppStore.getState().status.message).toMatch(/terminal|feed/i);
   expect(workers).toHaveLength(0); controller.dispose();
 });
+
+it('ignores a reached-target flag from an earlier pacing configuration in the same generation', () => {
+  const workers: any[] = [];
+  vi.stubGlobal('Worker', class { messages: any[] = []; onmessage: any; constructor() { workers.push(this); } postMessage(m: unknown) { this.messages.push(m); } terminate() {} });
+  const scene = makeScene({ name: 'target edits', objects: [makeCharge()] });
+  Object.assign(scene.simulation, { useApproximation: false, targetTime: 1e-9 });
+  const controller = new SimulationController(); controller.update(scene, true);
+  const worker = workers[0], generation = worker.messages[0].generation;
+  useAppStore.getState().setPlaying(true);
+  controller.update({ ...scene, simulation: { ...scene.simulation, targetTime: 2e-9 } }, true);
+  const frame = { type: 'frame', generation, time: 1e-9, steps: 10, meta: { dt: 1e-10, dx: 0.1, frequency: 0 }, energy: { electric: 0, magnetic: 0 }, probes: [], targetReached: true };
+  worker.onmessage({ data: frame });
+  expect(useAppStore.getState().playing).toBe(true);
+  controller.update({ ...scene, simulation: { ...scene.simulation, targetTime: -1 } }, true);
+  expect(() => worker.onmessage({ data: frame })).not.toThrow();
+  controller.update({ ...scene, simulation: { ...scene.simulation, targetTime: 2e-9 } }, true);
+  worker.onmessage({ data: { ...frame, time: 2e-9, steps: 20 } });
+  expect(useAppStore.getState().playing).toBe(false);
+  controller.dispose();
+});

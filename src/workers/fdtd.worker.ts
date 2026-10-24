@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { FdtdSolver } from '../engine/fdtd/fdtd3d';
 import { MaxwellSceneSolver } from '../engine/maxwell/sceneSolver';
+import { maxwellRunBudget } from '../engine/maxwell/runBudget';
 import type { FdtdFrame, FdtdRequest, FdtdResponse, WaveSlice } from './protocol';
 import type { Scene, SliceQuantity } from '../scene/types';
 import { isProbe } from '../scene/types';
@@ -42,8 +43,7 @@ function tick(): void {
   scheduled = false;
   if (!running || !solver || !scene) return;
   try {
-    const steps = Math.max(1, Math.min(20, scene.simulation.stepsPerFrame));
-    solver.step(steps);
+    advanceRequestedBatch();
     publishFrame();
   } catch (err) {
     running = false;
@@ -55,6 +55,18 @@ function tick(): void {
     return;
   }
   requestFrame();
+}
+
+function targetBudget() {
+  if (!(solver instanceof MaxwellSceneSolver) || !scene) return undefined;
+  return maxwellRunBudget(solver.meta.dt, solver.steps, scene.simulation.targetTime, scene.simulation.stepsPerFrame);
+}
+
+function advanceRequestedBatch() {
+  if (!solver || !scene) return;
+  const count = targetBudget()?.stepsThisBatch ?? Math.max(1, Math.min(20, Math.floor(scene.simulation.stepsPerFrame) || 1));
+  if (count > 0) solver.step(count);
+  if (targetBudget()?.reached) running = false;
 }
 
 function sliceQuantity(scene: Scene): SliceQuantity {
@@ -105,6 +117,7 @@ function buildFrame(): FdtdFrame {
       transforms: s.poses(),
       lines: sc.display.fieldLines === 'none' ? undefined : { field: sc.display.fieldLines, lines: s.fieldLines(sc.display.fieldLines, sc.display.lineCount) },
       diagnostics,
+      targetReached: targetBudget()?.reached,
     } : {}),
   };
   if (diagnostics) diagnostics.samplingMs = performance.now() - started;
@@ -131,6 +144,7 @@ ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
     if (!solver) return;
     if ('generation' in msg && msg.generation !== generation) return;
     if (msg.type === 'config') {
+      if (solver instanceof MaxwellSceneSolver) maxwellRunBudget(solver.meta.dt, solver.steps, msg.scene.simulation.targetTime, msg.scene.simulation.stepsPerFrame);
       scene = msg.scene;
       if (solver instanceof MaxwellSceneSolver) solver.scene.display = scene.display;
       if (!running) publishFrame();
@@ -152,11 +166,12 @@ ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
     }
     if (msg.type === 'singleStep') {
       if (scene) {
-        solver.step(Math.max(1, Math.min(20, Math.floor(scene.simulation.stepsPerFrame) || 1)));
+        advanceRequestedBatch();
         publishFrame();
       }
     }
   } catch (err) {
+    running = false;
     post({
       type: 'error',
       generation,

@@ -36,6 +36,7 @@ import {
 } from '../scene/types';
 import { formatPrefixed, formatSci } from '../engine/units';
 import { M_ELECTRON, M_PROTON, E_CHARGE, C_LIGHT } from '../engine/constants';
+import { maxwellRunBudget } from '../engine/maxwell/runBudget';
 
 export function RightPanel() {
   const rightTab = useAppStore((s) => s.rightTab);
@@ -668,6 +669,10 @@ function SimulationPanel() {
   const estimatedDt = sim.cfl * dx / (C_LIGHT * Math.sqrt(3));
   const dt = meta?.dt ?? estimatedDt;
   const hasConductors = scene.objects.some(isConductor);
+  let runBudget: ReturnType<typeof maxwellRunBudget> | undefined;
+  if (fullMaxwell) try {
+    runBudget = maxwellRunBudget(dt, measurements.extra?.steps ?? 0, sim.targetTime, sim.stepsPerFrame, measurements.extra?.stepsPerSecond);
+  } catch { /* The worker reports invalid imported targets without breaking the inspector. */ }
   return (
     <>
       <PanelSection title="Physical model">
@@ -678,9 +683,19 @@ function SimulationPanel() {
         {!fullMaxwell && scene.mode === 'waves' && <div className="note">The existing wave FDTD model remains selected. Full Maxwell scene coupling and its capability checks require switching approximation off.</div>}
         {fullMaxwell && <>
           <div className="note">Experimental: evolves Maxwell E and B for supported source and material models. Selecting the full equations does not implement every moving-material or circuit model. Unsupported configurations stop with an explicit error.</div>
-          <div className="note">The finite grid uses staircased geometry and explicit constitutive and source models. Permanent magnets use impressed magnetization in the authored laboratory shape, including motion; hysteresis and rest-shape Lorentz contraction are not modeled. Electrodes have finite conductivity and isolated initial charge; voltage feeds are not implemented. Check spatial and time convergence for each configuration.</div>
+          <div className="note">The finite grid uses staircased geometry and explicit constitutive and source models. Permanent magnets use impressed magnetization in the authored laboratory shape, including motion; hysteresis and rest-shape Lorentz contraction are not modeled. Electrodes have finite conductivity and isolated initial charge. Stationary terminal current feeds are available; voltage clamps and moving feeds remain unsupported. Check spatial and time convergence for each configuration.</div>
           <div className="note">Resolve charge width and source bandwidth, including the startup ramp. Abrupt source or velocity starts can cause persistent grid ringing. Check spatial and time refinement; frequencies and velocities are never silently rescaled.</div>
           <div className="note">Physical time is not animation wall time. Estimated Δt: {formatSci(dt, 4)} s; one physical second requires about {formatSci(1 / dt, 3)} field steps. A slow mechanical cycle can be extremely expensive. Steps per frame changes pacing, never c or the authored motion frequency.</div>
+          <CheckRow label="Stop at physical time" checked={sim.targetTime !== undefined} onChange={enabled => setSimulation({ targetTime: enabled ? Math.max((measurements.extra?.steps ?? 0) * dt + 100 * dt, 1e-9) : undefined })} />
+          {sim.targetTime !== undefined && <>
+            <Field label="Target physical time" hint="Absolute field time in seconds. Editing this target preserves the current fields.">
+              <NumberInput value={sim.targetTime} min={0} step={dt} unit="s" onChange={targetTime => setSimulation({ targetTime })} />
+            </Field>
+            <div className="stat-line"><span>Target grid time (s)</span><b>{runBudget?.targetGridTime !== undefined ? formatSci(runBudget.targetGridTime, 5) : '\u2014'}</b></div>
+            <div className="stat-line"><span>Remaining physical steps</span><b>{runBudget?.remainingSteps?.toLocaleString() ?? '\u2014'}</b></div>
+            <div className="stat-line"><span>Estimated stepping time (s)</span><b>{runBudget?.estimatedSeconds !== undefined ? formatSci(runBudget.estimatedSeconds, 4) : '\u2014'}</b></div>
+            <div className="note">Stops at the first grid step reaching the target, within floating-point alignment tolerance. The estimate uses measured field stepping and excludes preparation, sampling, rendering and message costs. Extend or disable the target to continue, or rewind to replay it. The authored target survives rewind.</div>
+          </>}
           {hasConductors && <>
             <CheckRow label="Initialize plate voltages, then isolate" checked={sim.maxwellConductorModel === 'isolated'} onChange={isolated => setSimulation({ maxwellConductorModel: isolated ? 'isolated' : undefined })} />
             <div className={`note ${sim.maxwellConductorModel ? '' : 'warn'}`}>Authored potentials initialize conductor charge once. The bodies then evolve with finite conductivity and no voltage clamp. Select this model explicitly to run conductors. An explicit terminal current feed can transfer charge between stationary bodies along its visible feed and return route.</div>
@@ -888,8 +903,14 @@ function MeasurePanel() {
             ...scene.objects.filter(o => o.visible && (o.kind === 'conductor' || ((o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil') && o.electricalModel === 'conducting')))
               .map(o => [`bodyCharge:${o.id}`, `${o.name} charge (C)`]),
           ] : []),
+          ...((measurements.extra?.sourceParticleCount ?? 0) > 0 ? [
+            ['sourceParticleKinetic', 'Source-particle kinetic estimate (J)'], ['sourceParticleWork', 'Field work on source particles (J)'],
+            ['sourceParticleCouplingResidual', 'Particle coupling mismatch (J)'], ['sourceParticleCouplingRelative', 'Relative particle coupling mismatch'],
+          ] : []),
           ...(scene.objects.some(o => o.visible && o.kind === 'dielectric' && o.materialModel === 'drude') ? [['drudeKineticEnergy', 'Carrier kinetic estimate (J)'], ['drudeLoss', 'Drude damping estimate (J)']] : []),
         ].map(([key, label]) => <div className="stat-line" key={key}><span>{label}</span><b>{measurements.extra?.[key] !== undefined ? formatSci(measurements.extra[key], 4) : '—'}</b></div>)}
+        {(measurements.extra?.sourceParticleCouplingRelative ?? 0) > 0.01 && <div className="note warn" role="alert">Measured particle field-work/kinetic mismatch exceeds 1% of transferred energy. This run does not validate coupled energy conservation. Check source shape and spatial/time convergence; force-driven point-charge coupling remains experimental.</div>}
+        {(measurements.extra?.sourceParticleCount ?? 0) > 0 && <div className="note">Particle work uses time-centered E and the actual conserved deposited current. Kinetic energy estimates integer-time momentum with a half kick. Their difference measures coupling error; it does not include the general mechanical, momentum or external-drive ledger.</div>}
         <div className="note">Relative Gauss residual uses the current charge and D/Δx scales. Applied-current work includes deposited conduction and bound currents as well as impressed sources. Stationary material loss, body heat and partial rigid linear work are separate diagnostics; they are not a closed energy/momentum ledger. Check resolution, domain, boundaries and initialization.</div>
       </PanelSection>}
 

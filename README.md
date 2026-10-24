@@ -43,6 +43,7 @@ Selecting evolving Maxwell equations for these models does not mean that the ful
 
 - **Rewind to t = 0** pauses and reinitializes the current edited definition. It clears runtime trails/charts while preserving objects, parameters, trajectories, selection and undo history.
 - **Replay** reinitializes that definition and starts it. **Restore preset** separately discards edits in favor of the library preset and can be undone; it is disabled for custom scenes.
+- In full Maxwell mode, **Solve > Stop at physical time** sets an absolute target in seconds. The run stops at the first field step reaching it; changing the target preserves the current state. Rewind/replay preserves the target as well as edits. The remaining-step count and measured stepping-time estimate help assess cost.
 - **Space** plays/pauses; **Single step** advances the selected solver. Maxwell sources, bodies and fields share physical dt. Display edits do not advance that clock. Physics edits initialize a new run; obsolete worker generations cannot replace its results.
 - Use **New custom scene** and **Add**. Wires support 3D control points and smooth curves. Select prescribed Dynamics for oscillation, arbitrary-axis spin or timed keyframes. Rows are `t, x, y, z, rx, ry, rz`: seconds, metre offsets and degree offsets from the authored initial pose. Maxwell loops must return continuously to the first pose; piecewise-linear velocity changes can still excite high frequencies.
 - Enter probe coordinates under **Edit → Position**, or **Data → Sample at coordinate → Add probe here**. Maxwell probes show E, B, D, H, J and deposited charge density when available. A unique electrostatic potential is not reported for full evolving E. Outside-domain probes are marked unavailable.
@@ -64,6 +65,8 @@ npm run bench:maxwell -- --json artifacts/maxwell-benchmark.json --report docs/m
 
 ## Validation and remaining work
 
+- [CPU Float32 storage comparison](docs/maxwell-precision-validation.md): optional kernel storage against the Float64 reference. The website still uses Float64; this is not WebGPU parity.
+- [Coupled source audit](docs/maxwell-coupling-validation.md): the current force-driven point/sphere coupling fails energy acceptance. Data exposes particle kinetic energy, deposited-current work and their mismatch; these diagnostics do not correct the coupling.
 - [Numerical core validation](docs/maxwell-core-validation.md): specified Fresnel amplitudes, stationary cavity frequency, finite-conductivity attenuation/loss and selected normal/oblique CPML pulses, with refinement and exclusions.
 - [Native Meep comparison](docs/maxwell-meep-validation.md): actual Meep 1.35.0 source-free periodic standing waves in vacuum and relative permittivity 4. Maximum selected CPU/Meep RMS difference is `2.51e-16`; continuum error is reported separately and converges at second order. This does not validate moving bodies, charge sources or CPML.
 - [Physics model and evidence](docs/physics-model.md): source initialization, moving-charge refinement, observable meanings and force/material limitations.

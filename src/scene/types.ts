@@ -218,6 +218,8 @@ export interface SimulationSettings {
   pmlCells: number;
   cfl: number;
   stepsPerFrame: number;
+  /** Optional absolute field-time target in seconds; absent runs without a target. */
+  targetTime?: number;
   /** Multiplier for particle / quasistatic animation speed. */
   timeScale: number;
 }

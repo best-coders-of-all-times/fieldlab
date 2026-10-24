@@ -1,0 +1,19 @@
+# Resolved smooth source coupling
+
+Continuation of approved M4 finite charge shapes and M6 force/energy validation. The existing momentum-style CIC gather suppresses self force but is not adjoint to the deposited-current work. Actual closed point/sphere audits fail energy acceptance. Merely increasing or rotating particle quadrature can change that error substantially; no tuned quadrature is accepted as a correction.
+
+Ruling: introduce an explicitly selected smooth finite charge cloud with a width in metres and analytically integrated charge assignment, preserving legacy CIC scenes and labelling their limitations. This defines a physical/numerical source profile, not an analytic static-field overlay. Keep the CPU Maxwell update and exact continuity. Validate shape/phase integration and force-work compatibility before changing the temporal coupling or claiming M6 acceptance. The general plan remains incomplete.
+
+## Pure source helper
+
+Use a separable, compact cubic B-spline density: rho(x)/q = product beta3((x_a-center_a)/width)/width, support center +/-2width in each axis. beta3 is the standard centered cubic spline. Integrate this density analytically against the native CIC charge tent at each grid node; do not replace it with aligned quadrature points. Width is an explicit physical parameter, independent of h. Complete source support must fit the deposition domain.
+
+For one axis let F2(y)=integral(-infinity,y) (y-u)*beta3(u/width)/width du. Then node weight S_i(center)=[F2(x_i-center+h)-2F2(x_i-center)+F2(x_i-center-h)]/h. Stable negative-half formulas use u=y/width: F2=width*(u+2)^5/120 on [-2,-1], width*((u+2)^5-4*(u+1)^5)/120 on [-1,0], F2(y)=F2(-y)+y for y>0, and 0/y outside support. The corresponding F1=CDF gives derivative dS_i/dcenter=-[F1(y+h)-2F1(y)+F1(y-h)]/h. F1 negative-half uses fourth powers/24; positive-half is 1-F1(-y). Return roundoff-normalized weights and derivatives including derivative of the normalization, without pruning physical support or clipping geometry.
+
+Current over a finite path uses old/new one-dimensional weights, Delta S=Snew-Sold, and edge cumulative C_i=sum(j<=i)(Sold_j-Snew_j). For axis x, Jx_edge=q*dx/(dt*dv)*C_i*[Sy_old*Sz_old+(DeltaSy*Sz_old+Sy_old*DeltaSz)/2+DeltaSy*DeltaSz/3], with cyclic equivalents. This symmetric product identity yields exact endpoint charge continuity even for diagonal/multicell paths. Its electric line weights W are dx*C_i*transverseFactor. An instantaneous adjoint E gather uses dx*(-sum(j<=i) dS_j/dcenter)*Sy*Sz at native edges. A finite trajectory gather uses W/displacement per component where nonzero, with the derivative limit for zero displacement. No runtime potential solve.
+
+Tasks:
+1. Pure smooth-charge helper: analytic 1D weights/derivatives, rho and trajectory current, instantaneous adjoint native-E gather. Tests first: partition/positivity/full support, analytic quadrature comparisons, phase continuity, derivative check, diagonal/multicell charge closure, work adjoint, constant fields and compatible potential-energy gradient. Publish exact conventions and limits.
+2. Explicit scene source profile/width and inspector controls, initialization, prescribed current and force gathers; preserve undefined legacy CIC. Do not silently change existing saved scenes. New full-mode examples can choose the smooth source explicitly.
+3. Fixed physical-width mesh/time/translation-phase studies of an isolated cloud and closed interacting clouds. Audit field energy+flux against mechanical energy and momentum/stress; keep failed targets visible. Resolve temporal coupling error with a compatible midpoint/iteration if measurements require it, rather than adding algebraic energy rescaling.
+4. Browser/edit/replay checks, full regressions/build and a Git checkpoint. M6 remains unaccepted until convergent energy/momentum and passive-body feedback requirements pass.

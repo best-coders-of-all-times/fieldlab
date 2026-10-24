@@ -14,6 +14,7 @@ import type { ParticleFrame } from '../engine/particles/system';
 import { InductionSystem } from '../engine/induction/system';
 import type { InductionFrame } from '../engine/induction/system';
 import { isParticle } from '../scene/types';
+import { maxwellRunBudget } from '../engine/maxwell/runBudget';
 import { useAppStore } from './store';
 
 function physicsKey(scene: Scene): string {
@@ -352,6 +353,14 @@ export class SimulationController {
       });
       this.fdtdWorker?.postMessage({ type: this.playing ? 'start' : 'pause' } as FdtdRequest);
     } else if (msg.type === 'frame') {
+      // Target edits do not rebuild physics. A queued frame may still refer to
+      // the old target, so evaluate its step against the latest authored target.
+      if (msg.targetReached && this.scene?.simulation.useApproximation === false) {
+        let reached = false;
+        try { reached = maxwellRunBudget(msg.meta.dt, msg.steps, this.scene.simulation.targetTime, 1).reached; }
+        catch { /* The worker reports an invalid imported/configured target. */ }
+        if (reached) { this.playing = false; store.setPlaying(false); }
+      }
       store.setTime(msg.time);
       store.setFdtdMeta(msg.meta);
       store.setMeasurements({
