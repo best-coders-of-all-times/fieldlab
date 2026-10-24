@@ -16,6 +16,6 @@ export function ProbeReadout({ reading }: { reading?: ProbeReading }) {
     </div>)}
     {fullMaxwell && reading.rho !== undefined && <div className="stat-line"><span>ρ</span><b>{formatSci(reading.rho, 5)} C/m³</b></div>}
     {scene.mode === 'fields' && scene.simulation.useApproximation !== false && <div className="stat-line"><span>Potential φ</span><b>{formatPrefixed(reading.phi, 'V')}</b></div>}
-    {fullMaxwell && <div className="note">Total E and B from Maxwell evolution. D, H, J and free charge density ρ are shown when sampled. A unique electrostatic potential does not describe the induced electric field.</div>}
+    {fullMaxwell && <div className="note">Total E and B from Maxwell evolution. D, H, J and deposited charge density ρ are shown when sampled; ρ includes bound polarization charge where present. A unique electrostatic potential does not describe the induced electric field.</div>}
   </div>;
 }

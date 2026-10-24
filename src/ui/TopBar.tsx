@@ -108,7 +108,7 @@ export function TopBar() {
         <span className="status-chip" title={scene.simulation.useApproximation === false
           ? 'Evolved Maxwell fields for supported scene models. See Solve for setup and physical time cost.'
           : 'Electrostatic/quasistatic fields, or the legacy wave solver. See Solve for validity limits.'}>
-          {scene.simulation.useApproximation === false ? 'Maxwell FDTD' : 'Approximation'}
+          {scene.simulation.useApproximation === false ? 'Maxwell FDTD · experimental' : 'Approximation'}
         </span>
 
         <span className="top-spacer" />

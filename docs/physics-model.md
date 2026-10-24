@@ -1,56 +1,113 @@
 # FieldLab physics model and execution
 
-FieldLab uses equations from classical electromagnetism with explicit model assumptions and numerical approximations. It does **not** solve a fully coupled, general Maxwell problem for every scene. An animated magnet's changing B overlay does not imply that the displayed E includes its induced electric field.
+**Solve → Use approximation** is an explicit saved solver choice. Existing presets and older files default to their previous behavior. Approximation field scenes use the electrostatic/quasistatic tools; approximation wave presets retain the legacy wave solver. Switching approximation off selects the **experimental Maxwell scene solver**. Unsupported configurations fail visibly rather than falling back to static fields.
 
-## Electrostatics
+The experimental path evolves Maxwell fields for specified models. It is not a completed, universally validated moving-material, circuit and mechanics solver. The [implementation plan](superpowers/plans/2026-10-24-full-maxwell-fdtd.md) retains acceptance requirements beyond the current code and measurements.
 
-For an open scene containing only charges, `electrostatics/analytic.ts` superposes Coulomb fields, uniformly charged spheres/shells, and a prescribed uniform E. Point charges have a 0.2 mm softening length for field visualization; they are not mathematical singularities. Sphere formulas are exact without softening, but exterior sampling also uses that small regularization.
+## Approximation: electrostatics and magnetostatics
 
-Conductors, dielectrics, or the Grounded box setting select `electrostatics/poisson.ts`. It solves
+Open charge-only scenes superpose analytic Coulomb fields, charged sphere/shell formulas and uniform external E in `electrostatics/analytic.ts`. Point-charge visualization uses a 0.2 mm softening length. Conductors, dielectrics or grounded boundaries select the multigrid finite-volume Poisson model:
 
-```
+```text
 div(epsilon_r grad(phi)) = -rho / epsilon_0
 E = -grad(phi)
 ```
 
-on a finite node grid using multigrid. Charges use cloud-in-cell deposition; sphere charge is distributed over intersecting cells. Geometry and interfaces are staircased. The selected 48/64/96 cell resolution, solver tolerance and finite domain affect the result.
+Geometry/interfaces are staircased; point charge uses cloud-in-cell deposition. Fixed conductors impose equipotential regions. Floating conductor potentials follow a numerical capacitance matrix and prescribed net charges. Capacitance depends on geometry, resolution and finite boundary. Grounded box fixes outer phi to zero. Open + external E supplies bare-source potential minus `E_external · r` on the faces; truncating induced multipoles makes this an approximate open boundary.
 
-Fixed conductors impose an equipotential. Floating conductor potentials are determined from a numerical capacitance matrix and prescribed total charges, including charge induced by free sources and the applied boundary field. Capacitance is for the modeled finite geometry and boundary, rather than an exact isolated-body formula.
+`magnetostatics/biotSavart.ts` integrates regularized current segments. Wires share their sampled curve with the viewport. A uniformly magnetized cylinder uses 16 equivalent surface-current loops with `K_b = M × n`; this is not a hysteresis, saturation, demagnetization or micromagnetic model. Static B uses vacuum permeability; dielectric permeability/conductivity do not modify this approximation. Open filaments omit return paths. Inductance uses thin-wire/long-solenoid formulas.
 
-Grounded box fixes phi = 0 on the outer faces and screens an imposed external E. Open + external E uses the bare source potential minus E_external dot r on those faces. This approximates an isolated domain; it truncates the induced multipole field at the outer boundary. Enlarge the domain and compare resolutions to assess sensitivity.
+Moving-source overlays apply those solutions instantaneously at prescribed poses. `L/(cT) ≪ 1` and `v/c ≪ 1` are useful checks, but neither guarantees that omitted inductive E, eddy currents or circuit feedback are negligible. The appropriate reduction depends on the observable and electrical configuration.
 
-These are the static reduction of Maxwell's equations, explained in [Feynman's electrostatics lectures](https://www.feynmanlectures.caltech.edu/II_04.html). The finite grid, softening and finite boundary are implementation approximations.
+## Approximation: induction and test particles
 
-## Magnetostatics and moving sources
+`induction/system.ts` differentiates numerical loop/coil flux linkage for `EMF = -dPhi/dt`, or integrates `(v × B) · dl` for a moving wire. Coils use central loop area times turns. Oscillation, arbitrary-axis spin and keyframes are authored kinematics. There is no passive circuit-current solve or feedback. E probes show the electrostatic contribution; EMF alone does not reconstruct spatial nonconservative E. Propagation/radiation is omitted.
 
-`magnetostatics/biotSavart.ts` evaluates the Biot–Savart integral with straight source segments, midpoint quadrature and a regularized denominator. Segment length is at most 3 cm; curved wires share a sampled Catmull–Rom centreline with the viewport. Each filament retains its own softening radius, normally 1.2 times its wire radius with a 1 mm minimum.
+Legacy particles are nonrelativistic Boris **test particles**. They feel the initial analytic/Biot–Savart source snapshot and uniform fields, but do not source fields, use conductor/dielectric Poisson fields, or follow moving-source fields. Wall reflection/damping and capped adaptive stepping are modeling choices. Particle time maps one wall second to 200 ns at 1×; prescribed induction maps it to one second. Mixed legacy animation therefore has no coupled physical clock. Prescribed particle motion replaces its Boris orbit. Explicit force-driven source-body overrides require Maxwell mode and otherwise give an error; legacy particles without overrides remain available.
 
-A permanent magnet is a uniformly magnetized cylinder, represented by 16 stacked equivalent surface-current loops. Each loop has current M times length / 16. Its side surface has K_b = M cross n, magnitude |M|; the end faces have zero bound current for axial magnetization. This uses a 6 mm regularization and is not a micromagnetic, hysteresis, saturation or demagnetization calculation. The gold overlay samples this surface-current direction; the mint arrow marks magnetization.
+## Legacy wave presets
 
-Static B assumes vacuum permeability. Changing a dielectric's mu_r or conductivity affects wave scenes, not this Biot–Savart calculation. Open straight wires represent prescribed current sections with their return paths omitted. Loop/coil inductance readouts use thin-wire/long-solenoid formulas, not a general mutual-inductance matrix.
+With approximation retained, `fdtd/fdtd3d.ts` advances Yee-style Faraday and Ampere–Maxwell curl updates for prescribed wave sources, stationary linear isotropic nondispersive epsilon/mu/conductivity and PEC masks. Its graded impedance-matched absorbing sponge is **not CPML**. Source injection and display interpolation follow legacy conventions; static charge, particle, magnet and current-filament gadgets are not coupled into that solver. These restrictions apply to that path, not to every Maxwell calculation in the app.
 
-Magnetostatics drops time derivatives in Maxwell's equations; see [Feynman's derivation](https://www.feynmanlectures.caltech.edu/II_13.html). Moving-source scenes apply that solution instantaneously at successive prescribed poses. This is a quasistatic approximation, with no retarded propagation or radiation.
+## Experimental Maxwell kernel and clock
 
-## Induction and particles
+`engine/maxwell/yee.ts` stores Float64 electric/current components on edges, magnetic components on faces and charge on nodes. Compatible curl/divergence operators advance fields and nodal charge. `deposition.ts` deposits finite cloud-in-cell charge trajectories with matching discrete continuity. The adapter supplies current from its source/matter models; runtime E/B come from field evolution, without an independent Biot–Savart overlay added to the answer.
 
-`induction/system.ts` integrates B through pickup loops and differentiates flux linkage to obtain EMF = -dPhi/dt. Coils use their central loop area times turn count. Moving wires use the integral of (v cross B) dot dl. Motion can oscillate, spin about an arbitrary world axis, or interpolate timed position/rotation offsets. Keyframes are prescribed kinematics, not a mechanics solver. Repeating mismatched endpoints produces a discontinuity.
+Field steps, source trajectories, source particles and runtime body poses share physical dt. The dedicated browser worker returns step, time, generation, probes, transforms and diagnostics. Rendering consumes accepted frames rather than driving a second wall-clock Maxwell motion oscillator. Restart invalidates old generations, including replies already in flight.
 
-There is no circuit resistance/current solve, eddy current, induced-current feedback on B, radiation reaction or magnetic force feedback on moving objects. E probes in these scenes report the **electrostatic contribution only**. The spatial, nonconservative induced E is not reconstructed from Faraday's law. The full coupling is described by [Maxwell's equations](https://www.feynmanlectures.caltech.edu/II_18.html); reporting an integrated EMF does not supply that missing field solution.
+The core supports stationary linear isotropic nondispersive materials, conductivity, PEC closure and CPML with CFL/material validation. The scene adapter currently accepts PEC/CPML and rejects periodic scenes pending initialization/transport validation. Core/native-reference periodic tests do not enable arbitrary periodic source scenes.
 
-Particles use a nonrelativistic Boris pusher. They are test charges and do not source fields. Their force uses the initial analytic E/Biot–Savart source snapshot and uniform external fields; it does not use conductor/dielectric Poisson fields or follow moving source fields. Particle walls reflect and damp velocity artificially. The adaptive step count is capped. Particle animation maps one wall second to 200 ns at 1x, while prescribed motion maps one wall second to one second. Mixed particle/induction scenes are therefore not a coupled common-time simulation. Assigning prescribed motion to a particle replaces its Boris trajectory.
+Initialization prepares electrostatic E/charge with finite-domain boundary/electrode conditions. External B is the initial uniform B. Impressed currents start at t = 0 and generate a transient. Static initial E with suddenly assigned velocity and no compatible magnetic/source history is not an established uniformly moving solution. Capturing a prepared static background for CPML does not establish an exact isolated DC boundary for every configuration.
 
-## Wave scenes
+## Experimental source and matter models
 
-`fdtd/fdtd3d.ts` advances discrete Faraday and Ampere–Maxwell curl equations with a Yee-style leapfrog finite-difference scheme. It includes linear, isotropic, nondispersive epsilon_r, mu_r and conductivity, PEC masks, and per-axis periodic/PEC/absorbing boundaries. Material readouts use B = mu H, electric energy epsilon |E|^2 / 2, magnetic energy mu |H|^2 / 2, and Poynting vector E cross H.
+| Object/model | Current behavior | Important limit |
+| --- | --- | --- |
+| Point charge / source particle | Grid-scale cloud-in-cell charge and conserved trajectory current; prescribed or field-driven motion | Finite shape, not continuum point self-force or separate radiation reaction. Closed deposition-domain exits are rejected. |
+| Sphere/shell | Distributed charge samples: four radial shells for a solid, 48 angular samples per shell | Quadrature and grid require refinement; no analytic sphere formula during Maxwell evolution. |
+| Wire/loop/coil | Stationary impressed filament current; its deposited divergence evolves endpoint charge | Externally powered, not a passive terminal/return network. Moving filaments are rejected. |
+| Electric point source / antenna | Current deposition; amplitude in amperes | Magnetic point-current components and moving driven sources are rejected; no general calibrated port. |
+| Plane-wave gadget | Fixed x-normal current sheet; amplitude specifies an E scale; radiates both ways | Authored +x sheet orientation only, not a one-way TFSF source. |
+| Stationary dielectric | Staircased linear epsilon_r, mu_r and conductivity | No dispersion, hysteresis or general moving constitutive response; moving dielectrics are rejected. |
+| Conductor | Initialized isolated charge, finite conductivity and transported body-owned charge | Not a moving PEC, voltage supply or validated arbitrary moving interface. |
+| Permanent magnet | Prescribed laboratory-shape impressed polarization/magnetization, including motion | No force-driven magnet, rest-shape contraction, hysteresis or internal magnetic relaxation. |
 
-This is a numerical Maxwell curl solver, not an exact continuum solution. Grid dispersion, finite time steps, staircased materials, and interpolation affect accuracy. E/H samples share a display interpolation convention rather than exact space/time recentering of every staggered component. Source injection is prescribed: there is no self-consistent charge evolution, continuity enforcement or Gauss-law projection for arbitrary user sources. The plane-wave gadget is a fixed x-oriented electric source sheet, rather than an arbitrary-direction calibrated incident wave. Particle, static charge, current-filament and permanent-magnet gadgets are not coupled into FDTD.
+### Isolated finite-conductivity electrodes
 
-The absorbing boundary is an impedance-matched graded sponge, **not CPML**. Reflections remain. Check convergence with resolution, keep many cells per wavelength (including the shorter wavelength inside materials), and use the documented linear material range. This is an educational simulator rather than a validated general engineering solver.
+The user must choose **Initialize plate voltages, then isolate**. Fixed potentials prepare initial charge; floating objects prepare net charge through a capacitance solve. The voltage constraint is then removed. No hidden battery, voltage clamp, supply wire or return path is introduced.
 
-## Browser computation and hosting
+The selected lab/rest-frame finite-conductivity law is:
 
-All simulation code executes on the visitor's device. Poisson, field overlays and FDTD run in browser Web Workers. Particle stepping, prescribed motion and induction flux/EMF currently run on the browser's main thread. Rendering uses WebGL. Vite's development server serves files; it does not compute visitors' fields.
+```text
+J_body = rho_body v + sigma gamma [E + v × B - v(v · E)/c²]
+```
 
-For deployment, run `npm run build` and host `dist/` on a static host/CDN with JavaScript worker support. Each visitor supplies their own computation; more visitors increase asset delivery traffic rather than a shared physics CPU load. Large scenes can still burden an individual visitor's CPU, memory and battery. Dynamic overlays use one outstanding worker frame and keep the latest pose rather than queuing every animation frame. Heavy solves can refresh more slowly than object animation.
+Conductive edges join resolved material nodes. Body-owned charge is transported through matching discrete divergence, not deleted when voxel membership changes. Geometry is staircased and charge advection upwind. The explicit update requires `sigma gamma dt / epsilon_0 ≤ 0.45`; excessive conductivity gives an error without a hidden cap. The default 0.01 S/m is a demonstration parameter, not a claim to model copper or an ideal conductor at coarse resolution.
 
-An exact general-purpose upgrade would require one consistent electromagnetic model, charge-conserving sources and a common clock, dynamic materials/moving boundaries, circuit or particle coupling as needed, and convergence/validation for the intended experiments. Changing where the same code runs would not supply those missing physics.
+Moving-capacitor regressions check magnetic response, replay and charge constraints. They do not establish moving-PEC boundary accuracy, moving-mirror frequency/amplitude, general moving skin response or convergence of arbitrary rotating boundaries. Those remain separate validation requirements.
+
+### Impressed permanent magnets
+
+`magnetization.ts` treats the cylinder as the instantaneous **laboratory shape**, with a grid-scale smooth surface transition. It evaluates the selected local Lorentz transformation of impressed rest magnetization with zero rest polarization, using material-point velocity. It deposits compatible `curl M` and `dP/dt` current and initial bound polarization charge. Prescribed translation/rotation shares field time with subluminal material-point checks.
+
+This is an externally maintained source, not a globally Lorentz-contracted rigid rest body under arbitrary acceleration. Elasticity, hysteresis, saturation, demagnetization dynamics and force feedback are absent. Macroscopic readouts include `D = epsilon E + P` and `H = B/mu - M`; background-field energies omit the prescribed magnets' internal/source energy.
+
+### Force-driven motion
+
+Fixed mode represents an external support; prescribed mode represents a mechanical drive. Authored initial data survives mode changes. Point charges/source particles use a relativistic staggered momentum pusher, field gather and conserved trajectory current on the field dt. Existing particle mass/velocity supplies initial data unless explicitly overridden.
+
+Charged spheres and finite-conductivity bodies use experimental classical rigid-body force/torque integration, mass, principal inertia and initial linear/angular velocity. Translation beyond `0.01c` is rejected for that mechanics model. Controls do not establish a validated relativistic extended-body or isolated-body momentum model. Complete field/body/source/support energy and momentum accounting, prescribed-drive work and general self-force convergence remain incomplete. Individual work/loss diagnostics are not a closed global ledger.
+
+## Probes, resolution and physical time
+
+Full-mode probes return E/B and available D/H/J and deposited nodal charge density in SI. J includes the deposited contributions used by the field update. In impressed-magnet configurations rho includes bound polarization charge, so it is not exclusively free charge. B is synchronized to the electric sample time; each component is interpolated from its Yee location. Recentring/interpolation remain numerical approximations, especially at interfaces.
+
+A unique electrostatic phi cannot describe full evolving E; full-mode potential is not displayed as a computed zero. Poynting uses `E × H`. Linear-background field energies do not include magnet internal energy or complete mechanical/feed work.
+
+Resolve charge width, sphere/plate thickness, motion and source bandwidth, including startup. Abrupt point-current/velocity starts can produce persistent grid ringing. Smooth ramps help but do not replace spatial/time/domain/absorber refinement. Small B can reflect symmetry, physical scale or causal travel time; dramatic field lines do not measure accuracy.
+
+Frequencies, velocities and c are never silently rescaled. With cubic `dx = 0.01 m`, vacuum CFL 0.9 gives `dt ≈ 1.73e-11 s`: about `5.77e10` steps per physical second. A 1 Hz full-wave mechanical cycle can be prohibitively costly. Steps per frame changes pacing, not dt or authored frequency.
+
+## Replay, editing and local execution
+
+**Rewind to t = 0** pauses and reinitializes the current definition, clearing runtime trails/charts while preserving edits, selection and undo history. **Replay** reinitializes it and starts. **Restore preset** separately restores the library definition and can be undone; it is disabled for custom scenes. Display/probe edits do not advance field time. Physics changes initialize a new run; generations prevent old worker results replacing it.
+
+Poisson and both FDTD paths already run in local browser Web Workers. Legacy approximation particle/motion/EMF stepping remains on the main thread; experimental supported motion/particles run in the field worker. Rendering uses WebGL. Hosting delivers assets rather than computing fields. Offline Meep does not serve browser sessions. No WebGPU Maxwell backend is currently validated.
+
+**Conservative memory budget** is the solver's admission estimate, not measured live allocation, peak memory or browser RSS. [CPU performance](maxwell-performance.md) separately records retained buffers, preparation, stepping and sampling, with Node/browser worker/transfer/render distinctions.
+
+## Measured evidence and remaining work
+
+- [Core validation](maxwell-core-validation.md): specified Fresnel electric amplitudes, stationary PEC frequency, stationary conductive attenuation/loss and normal/30-degree CPML reflected amplitudes, with stated refinement/exclusions. Stationary optics does not validate moving media.
+- [Native Meep](maxwell-meep-validation.md): actual Meep 1.35.0 vacuum and epsilon_r = 4 periodic standing waves at 32/64/128 cells. Maximum selected CPU/Meep RMS is `2.51e-16`; independent continuum errors decrease approximately fourfold with doubled resolution. Matching discrete updates is distinct from continuum accuracy. These cases exclude charge, PML, interfaces, moving bodies and browser execution.
+- `tests/maxwell/moving-fields.test.ts`: a `1e-10 C` grid source ramps along x through a sampled smooth 1 ns velocity ramp to `0.01c`. At approximately 4.008 ns, the field at `(0, 0.25, 0)` is compared with the uniform-velocity charge field after the startup pulse passes. The source begins from electrostatic preparation, not an assumed moving steady state.
+
+| Requested resolution | Relative E error | Relative B error |
+| --- | --- | --- |
+| 16 | 12.52% | 7.15% |
+| 32 | 2.31% | 1.82% |
+| 64 | 0.55% | 0.676% |
+
+That selected charge benchmark's normalized Gauss residual is below `3e-15`. These errors apply to its history, finite-grid shape, point, time and boundary setup away from the source. They are not universal sub-percent claims. Abrupt starts produced unresolved ringing and are not interchangeable with this ramped benchmark.
+
+Replay/browser tests check authored-data preservation, worker generations, frame/probe/pose timing, explicit conductor setup and readouts. They do not establish physical correctness merely from finite fields or visible B. Moving PEC/mirror validation, general moving media, explicit voltage feeds, passive induction circuits, a closed energy/momentum ledger and CPU/WebGPU parity remain outstanding plan requirements.

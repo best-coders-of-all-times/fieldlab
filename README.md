@@ -1,101 +1,95 @@
 # FieldLab
 
-A 3D electromagnetism sandbox for electrostatics, magnetostatics, charged-particle motion, induction and time-domain Maxwell waves. Built with Vite, TypeScript, React and Three.js.
+A browser-based 3D electromagnetism sandbox built with Vite, TypeScript, React and Three.js. Choose the electrostatic/quasistatic tools or an **experimental Maxwell FDTD scene solver** with an explicit physical model.
 
-![FieldLab](public/favicon.svg)
-
-## Quick start
+## Run locally
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # physics + solver tests (Vitest)
+npm test           # numerical and application regressions
+npm run test:ui    # browser integration tests
 npm run build      # type-check and production build
 ```
 
-## What it does
+Simulation computation already runs on the visitor's device. Browser Web Workers perform the field solves; no remote physics service is required. Deploy by serving `dist/` from a static host with JavaScript worker support. Native Meep is an optional offline reference tool, never a browser dependency.
 
-FieldLab selects its solver from the chosen scene. Static, dynamic and induction scenes use the quasistatic tools; wave presets use FDTD. The redundant top-bar Fields / Waves switch has been removed.
+## Choose the physical model
 
-All computation runs on the visitor's device. The server serves the website's assets. See [the physics audit](docs/physics-model.md) for the equations, assumptions, numerical approximations and browser hosting model.
+**Solve → Use approximation** is saved with the scene. Existing presets and older files retain their previous solver by default. Switching it off selects the experimental Maxwell scene solver for either kind of preset. The top bar and viewport identify the choice. Unsupported configurations report an error instead of silently using static fields.
 
-### Fields — static and quasistatic
+| Choice | Computes | Main limits |
+| --- | --- | --- |
+| Approximation, field scenes | Analytic charge fields or multigrid Poisson; Biot–Savart B; prescribed-motion flux/EMF; legacy Boris test particles | E is electrostatic. No spatial induced E, retarded radiation or passive circuit feedback. Legacy particles do not source fields. |
+| Approximation, wave presets | Existing `fdtd/fdtd3d.ts` wave solver with prescribed wave sources, stationary materials/PEC masks and a graded absorbing sponge | Separate from the experimental coupled scene solver; gadget support and absorber differ. |
+| Experimental Maxwell FDTD | Float64 Yee evolution, conserved source deposition, CPML, selected material/source models, common field-time motion and source particles | Finite grid and model restrictions. Moving PEC, voltage feeds, general moving dielectrics and a complete body/field energy–momentum ledger remain unfinished. |
 
-- **Electrostatics.** Open scenes with bare charges use analytic superposition with a small near-source softening length. Scenes with conductors, dielectrics or grounded-box boundaries run a 3D finite-volume Poisson solve with geometric multigrid. Variable ε, floating and fixed-potential conductors, capacitance and differential capacitance are supported.
-- **Magnetostatics.** Wires, loops, coils and permanent magnets are discretised into current segments and evaluated with Biot–Savart. A bar magnet is represented by stacked equivalent surface-current loops, so the bound-current overlay and the field use the same model. Flux through loops and approximate inductance are computed from the same source set.
-- **Charged particles.** A Boris pusher advances test charges in the superposition of the analytic electric field, the Biot–Savart magnetic field and any uniform external **E**/**B**. Kinetic energy is conserved in a pure magnetic field, and crossed fields reproduce the **E × B / B²** drift. Trails are drawn as glowing world-lines. The displayed cyclotron radius and period come from the instantaneous fields.
-- **Induction.** Prescribed oscillation, arbitrary-axis spin and custom position/rotation keyframes drive:
-  - numerical flux and **ε = −dΦ/dt** through loops and coils (coil turns included),
-  - uniform-field flux **B·n̂ A**,
-  - motional EMF **∫(v × B)·dl** in a moving wire.
+For quasistatics, `L/(cT) ≪ 1` and `v/c ≪ 1` are useful conditions, but do not establish that omitted inductive E or circuit feedback is negligible. See [the physics model](docs/physics-model.md) for both paths.
 
-  Readouts appear in the viewport HUD and in the **Data** tab, and are plotted in the chart drawer.
+## Experimental Maxwell models
 
-### Waves — time-domain Maxwell
+- Point charges and source particles deposit finite-grid charge/current. Spheres/shells use discrete charge samples. These numerical shapes are not continuum point-charge self-force models.
+- Stationary linear, isotropic, nondispersive dielectrics support relative permittivity, permeability and conductivity. Moving dielectrics are rejected.
+- Conductors require **Initialize plate voltages, then isolate** in Solve. Authored voltages or floating net charges prepare the initial charge; subsequent evolution uses isolated finite-conductivity bodies. There is no battery, continuing voltage clamp or hidden feed/return wire. Excessive conductivity gives a stability error.
+- Permanent magnets are impressed magnetization sources in the authored laboratory shape, including prescribed motion and bound charge/current. This is not a hysteresis, micromagnetic, demagnetization, rest-shape contraction or force-driven magnet model.
+- Stationary wires, loops and coils supply externally driven impressed current, not passive pickup circuits. Moving filaments/driven wave sources require additional feed models and are rejected. Full-mode electric point/antenna amplitudes are in amperes. The plane-wave gadget is a bidirectional x-normal current sheet, not a one-way incident-wave boundary.
+- **Dynamics** offers fixed, prescribed and force-driven modes. Point/source-particle motion uses a relativistic momentum pusher. Charged spheres and conducting bodies use experimental classical rigid-body mechanics with a declared `0.01c` translation limit. Body force/torque and complete energy/momentum accounting require further validation.
+- Scene boundaries support PEC or CPML. Periodic boundaries are tested in the core/native references, but the coupled scene adapter rejects them pending initialization/transport validation.
 
-- A 3D Yee-lattice FDTD solver advances the full Faraday and Ampère–Maxwell curl equations with a leapfrog schedule.
-- Materials support relative permittivity/permeability and conductivity, plus PEC masks.
-- Plane-wave, point and dipole-antenna sources; CW or pulse waveforms.
-- Boundaries per axis: PEC, periodic, or a graded impedance-matched absorbing layer.
-- Slice heatmaps (|E|, components, |B|, energy, Poynting), vector arrows (E/B/P), probes, probe time series, and electric/magnetic energy diagnostics.
+Selecting evolving Maxwell equations for these models does not mean that the full general-purpose migration is complete or validated.
 
-## Presets
+## Editing, transport and probes
 
-- **Electrostatics** — point charges, charged sphere E(r), parallel-plate capacitor, capacitor with dielectric at fixed V and fixed Q, dielectric slab, conductor cavity, conducting sphere in E.
-- **Magnetostatics** — straight wire, current loop, solenoid, parallel wires, bar magnet.
-- **Dynamics** — electron in crossed E and B.
-- **Induction** — magnet through a loop, rotating-loop AC generator, rod on rails.
-- **Waves** — plane wave, reflection at a PEC, Fresnel reflection at a dielectric, Faraday cage, dipole antenna.
+- **Rewind to t = 0** pauses and reinitializes the current edited definition. It clears runtime trails/charts while preserving objects, parameters, trajectories, selection and undo history.
+- **Replay** reinitializes that definition and starts it. **Restore preset** separately discards edits in favor of the library preset and can be undone; it is disabled for custom scenes.
+- **Space** plays/pauses; **Single step** advances the selected solver. Maxwell sources, bodies and fields share physical dt. Display edits do not advance that clock. Physics edits initialize a new run; obsolete worker generations cannot replace its results.
+- Use **New custom scene** and **Add**. Wires support 3D control points and smooth curves. Select prescribed Dynamics for oscillation, arbitrary-axis spin or timed keyframes. Rows are `t, x, y, z, rx, ry, rz`: seconds, metre offsets and degree offsets from the authored initial pose. Maxwell loops must return continuously to the first pose; piecewise-linear velocity changes can still excite high frequencies.
+- Enter probe coordinates under **Edit → Position**, or **Data → Sample at coordinate → Add probe here**. Maxwell probes show E, B, D, H, J and deposited charge density when available. A unique electrostatic potential is not reported for full evolving E. Outside-domain probes are marked unavailable.
+- **View** controls field lines, arrows, slices and opacity. Transparency is visual only. Scenes autosave to `localStorage`; Export/Import preserves the authored JSON definition.
+- Drag to orbit, scroll to zoom, right-drag to pan; click to select. **Delete** removes selection, **G/R/S** changes the gizmo, **1–4** selects camera views, and **F** resets the camera.
 
-Each preset carries a **Theory** tab with equations and suggested experiments.
+## Resolution, startup and cost
 
-## Using the app
+Resolve source width, motion, interfaces and the highest significant source frequency, including its startup ramp. Abrupt current/velocity starts and under-resolved charge shapes can produce persistent grid ringing. Smooth source history and spatial/time/domain refinement are required before interpreting weak B or radiation. Frequencies and velocities are never silently rescaled to speed up a mechanical cycle.
 
-- **Drag** to orbit, **scroll** to zoom, **right-drag** to pan.
-- **Click** an object to select it; use the transform gizmo or the inspector to edit it.
-- **Space** play/pause, **Delete** remove selection, **G/R/S** translate/rotate/scale gizmo, **1–4** camera presets, **F** reset the camera.
-- The **View** tab controls field lines, arrows, slice planes, colormaps and overlays. The **Solve** tab exposes resolution, boundaries, external fields and the particle/induction slow-motion factor. The **Data** tab shows capacitance, inductance, energies, EMF/flux, particle telemetry, probes and solver statistics.
-- Scenes autosave to `localStorage` and are restored on reload; **Export/Import** in the top bar round-trips the scene as JSON.
-- Choose **New custom scene** in Scenes, then use the existing **Add** palette. A wire's Edit panel supports arbitrary 3D control points, straight segments or a smooth curve. **Motion** offers oscillation, spin, or timed keyframes: each row is `t, x, y, z, rx, ry, rz`, with seconds, metre offsets, and degree offsets relative to the object's initial pose. Reset rewinds the custom scene without deleting it.
-- Enter a probe's world coordinate under **Edit → Position**, or use **Data → Sample at coordinate → Add probe here**. Read all E/B components in Edit or Data; labels beside probes show magnitudes. Outside-domain probes are marked unavailable.
-- **View → Conductor opacity** exposes cavity interiors while retaining the conductor in the solve. The cavity preset starts transparent. **Bound surface current on magnets** shows gold current rings and arrowheads, plus a mint magnetization arrow.
+Physical time is not wall-clock animation time. With cubic `dx = 0.01 m` and CFL 0.9, vacuum `dt ≈ 1.73e-11 s`, requiring about `5.77e10` steps per physical second. Steps per frame changes pacing, not c or the authored motion frequency. Nanosecond experiments can be practical while a 1 Hz full-wave mechanical cycle is extremely costly.
 
-## Numerics and limitations
+The UI's **Conservative memory budget** is the solver's admission estimate, not exact live allocation or browser memory. See [measured CPU performance](docs/maxwell-performance.md) for preparation, stepping, sampling, buffer/payload counts and Node-versus-browser caveats.
 
-- **Absorber.** The wave solver uses a graded impedance-matched sponge, not a true CPML. Reflections are small but not zero; increase the layer thickness or use periodic walls for exact embedded 1D propagation.
-- **Resolution.** FDTD runs on the CPU in a Web Worker at 48³–96³ cells. Keep at least ~15 cells per wavelength. The FDTD speed test in `tests/fdtd_speed.test.ts` measures a phase velocity within a few percent of *c*.
-- **Particles are test charges.** They feel the field but do not source it (no PIC feedback). Their fields come from the analytic/Biot–Savart stack; a Poisson solution for conductors is not fed back into the particle pusher. Motion is non-relativistic.
-- **Scripted motion.** Field overlays and probes refresh in a browser worker at the moving source poses, with one outstanding frame to avoid queues. Heavy solves can update more slowly than object animation. Stationary Poisson solutions are reused when only magnetic sources move.
-- **Induction is quasistatic.** EMF is computed, but the spatial induced E field is not solved; E probes show the electrostatic contribution. There is no self-consistent circuit/current solve, eddy-current solver or radiation reaction. Magnetic forces on moving conductors are not included.
-- **Magnet model.** Bar magnets are approximated by 16 stacked current loops with a small Biot–Savart softening radius. This is accurate at the display scale but is not a full micromagnetic solve.
-- **Units and scale.** SI throughout. The default domain is under a metre; fields, charges and currents can be edited over many orders of magnitude, so readouts use SI prefixes/scientific notation.
-- **Particle time.** Wall time is mapped to 200 ns of plasma time at 1× (the **Particle slow-motion** control scales this), so cyclotron orbits are visible rather than instantaneous.
+```bash
+npm run bench:maxwell -- --json artifacts/maxwell-benchmark.json --report docs/maxwell-performance.md
+# Add --include64 for the larger grid; default is three steps per grid.
+```
+
+## Validation and remaining work
+
+- [Numerical core validation](docs/maxwell-core-validation.md): specified Fresnel amplitudes, stationary cavity frequency, finite-conductivity attenuation/loss and selected normal/oblique CPML pulses, with refinement and exclusions.
+- [Native Meep comparison](docs/maxwell-meep-validation.md): actual Meep 1.35.0 source-free periodic standing waves in vacuum and relative permittivity 4. Maximum selected CPU/Meep RMS difference is `2.51e-16`; continuum error is reported separately and converges at second order. This does not validate moving bodies, charge sources or CPML.
+- [Physics model and evidence](docs/physics-model.md): source initialization, moving-charge refinement, observable meanings and force/material limitations.
+- [Full implementation plan](docs/superpowers/plans/2026-10-24-full-maxwell-fdtd.md): outstanding moving-PEC/mirror, general moving-media, explicit-feed/passive-circuit, complete energy/momentum and WebGPU parity acceptance requirements.
+
+Browser tests exercise actual worker frames, edited-scene replay, probes, conductor setup and common physical time. They use Edge on Windows; install Playwright Chromium elsewhere. Screenshots go to `artifacts/`. Passing tests and selected references do not provide a universal accuracy guarantee.
+
+Check the committed native fixture without installing Meep:
+
+```bash
+node scripts/check-meep-reference.mjs
+```
+
+Native regeneration is documented in [the Meep report](docs/maxwell-meep-validation.md).
 
 ## Project layout
 
+```text
+src/engine/electrostatics/   analytic fields and multigrid Poisson
+src/engine/magnetostatics/  approximate Biot–Savart tools
+src/engine/particles/       legacy test-particle pusher
+src/engine/induction/       approximate prescribed-motion flux/EMF
+src/engine/fdtd/            legacy wave solver
+src/engine/maxwell/         experimental Yee core and coupled scene models
+src/scene/                 authored definitions, motion, defaults and presets
+src/workers/               local field workers and generation-tagged messages
+src/app/, src/ui/          state, controllers, transport and panels
+src/viewport/              Three.js rendering and field overlays
+tests/, scripts/, docs/    regressions, offline references and measured reports
 ```
-src/
-  engine/
-    electrostatics/   analytic fields, multigrid Poisson, capacitance
-    magnetostatics/   Biot–Savart segments, magnets, flux, inductance
-    particles/        Boris pusher and test-particle system
-    induction/        scripted motion, flux/EMF, motional EMF
-    fdtd/             Yee-lattice Maxwell solver
-    grid.ts           grids and sampling
-    colormap.ts       sRGB + linear-light colormaps
-  scene/              scene model, defaults, rasterisation, presets
-  workers/            statics and FDTD Web Workers
-  viewport/           Three.js objects, field layers, slices, arrows, trails
-  ui/                 React panels, charts, theory, transport
-  app/                Zustand store, controller, field bus
-tests/                physics and solver regression tests
-```
-
-## Tests
-
-`npm test` covers multigrid convergence, the parallel-plate capacitor, FDTD stability and phase velocity, the Boris pusher (energy conservation, gyroradius, **E × B** drift), Biot–Savart directions and magnitudes, all three induction demos (including the analytic **NBAω** and **Bℓv** amplitudes), and autosave restoration/merging.
-
-Additional regressions cover applied-field seeds, live worker fields/probe identities, floating-conductor charge constraints, domain-face gradients, material B/energy/Poynting, rotation conventions, source-radius independence and custom motion/reset. `npm run test:ui` runs the browser checks (Edge on Windows; install Playwright Chromium on other platforms). Screenshots are written to `artifacts/`.
-
-To deploy, run `npm run build` and serve `dist/` using a static host/CDN. No shared simulation backend is required.
-

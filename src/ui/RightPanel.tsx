@@ -614,8 +614,9 @@ function SimulationPanel() {
         </div>}
         {!fullMaxwell && scene.mode === 'waves' && <div className="note">The existing wave FDTD model remains selected. Full Maxwell scene coupling and its capability checks require switching approximation off.</div>}
         {fullMaxwell && <>
-          <div className="note">Evolves Maxwell E and B for supported source and material models. Selecting the full equations does not implement every moving-material or circuit model. Unsupported configurations stop with an explicit error.</div>
+          <div className="note">Experimental: evolves Maxwell E and B for supported source and material models. Selecting the full equations does not implement every moving-material or circuit model. Unsupported configurations stop with an explicit error.</div>
           <div className="note">The finite grid uses staircased geometry and explicit constitutive and source models. Permanent magnets use impressed magnetization in the authored laboratory shape, including motion; hysteresis and rest-shape Lorentz contraction are not modeled. Electrodes have finite conductivity and isolated initial charge; voltage feeds are not implemented. Check spatial and time convergence for each configuration.</div>
+          <div className="note">Resolve charge width and source bandwidth, including the startup ramp. Abrupt source or velocity starts can cause persistent grid ringing. Check spatial and time refinement; frequencies and velocities are never silently rescaled.</div>
           <div className="note">Physical time is not animation wall time. Estimated Δt: {formatSci(dt, 4)} s; one physical second requires about {formatSci(1 / dt, 3)} field steps. A slow mechanical cycle can be extremely expensive. Steps per frame changes pacing, never c or the authored motion frequency.</div>
           {hasConductors && <>
             <CheckRow label="Initialize plate voltages, then isolate" checked={sim.maxwellConductorModel === 'isolated'} onChange={isolated => setSimulation({ maxwellConductorModel: isolated ? 'isolated' : undefined })} />
@@ -624,7 +625,7 @@ function SimulationPanel() {
           {measurements.extra && <>
             <div className="stat-line"><span>Physical steps</span><b>{measurements.extra.steps?.toLocaleString() ?? '—'}</b></div>
             <div className="stat-line"><span>Measured steps / second</span><b>{measurements.extra.stepsPerSecond?.toFixed(1) ?? '—'}</b></div>
-            <div className="stat-line"><span>Allocated field memory</span><b>{measurements.extra.estimatedBytes !== undefined ? `${(measurements.extra.estimatedBytes / 1048576).toFixed(1)} MiB` : '—'}</b></div>
+            <div className="stat-line"><span>Conservative memory budget</span><b>{measurements.extra.estimatedBytes !== undefined ? `${(measurements.extra.estimatedBytes / 1048576).toFixed(1)} MiB` : '—'}</b></div>
           </>}
         </>}
         {status.phase === 'error' && status.message && <div className="note warn" role="alert">{status.message}</div>}

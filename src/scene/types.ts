@@ -285,7 +285,7 @@ export interface ProbeReading {
   D?: Vec3; // electric displacement, C/m²
   H?: Vec3; // magnetic field strength, A/m
   J?: Vec3; // current density, A/m²
-  rho?: number; // free charge density, C/m³
+  rho?: number; // deposited charge density, including bound polarization, C/m³
   phi: number;
   Emag: number;
   Bmag: number;
