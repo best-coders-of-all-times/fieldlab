@@ -21,6 +21,7 @@ import { makeFilamentGeometry, type FilamentGeometry } from './conductingFilamen
 import { wirePath } from '../../scene/wirePath';
 import { compileFeedWeights, integrateFeedCharge, resolveFeedContact } from './terminalFeed';
 import type { TrajectoryWeight } from './deposition';
+import { depositSmoothCharge, depositSmoothTrajectory, smoothTrajectoryWeights, smoothChargeWeights, gatherSmoothElectric } from './smoothCharge';
 
 // Particle momentum is staggered at time-dt/2, as in the PIC leapfrog.
 interface BodyState { position: Vec3; rotation: Vec3; velocity: Vec3; angularVelocity: Vec3; momentum: Vec3; }
@@ -121,7 +122,11 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     core.validateMaterials();
     this.materialOhmLimit = this.explicitOhmLimit();
     this.validateScene();
-    for (const charge of this.charges) depositCharge(core.rho, core, this.gridPoint(localToWorld(this.pose(charge.object, 0), charge.local)), charge.charge);
+    for (const charge of this.charges) {
+      const point = this.gridPoint(localToWorld(this.pose(charge.object, 0), charge.local)), width = this.sourceWidth(charge.object);
+      if (width !== undefined) depositSmoothCharge(core.rho, core, point, width, charge.charge);
+      else depositCharge(core.rho, core, point, charge.charge);
+    }
     this.hasMagnets = this.scene.objects.some(o => o.visible && isMagnet(o));
     if (this.hasMagnets) {
       const sources = buildMagnetizationSources(this.scene, core, this.min, 0);
@@ -139,7 +144,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     for (const object of this.scene.objects.filter(o => o.visible)) {
       if (!(isParticle(object) || isCharge(object))) continue;
       if (!usesParticleDynamics(object)) continue;
-      const body = this.bodies.get(object.id)!, field = this.sampleForForce(body.position);
+      const body = this.bodies.get(object.id)!, field = this.sampleSourceForForce(object, body.position);
       const mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1);
       body.momentum = advanceParticle(body.position, body.momentum, -object.charge, mass, field.E, field.B, core.dt / 2).momentum;
     }
@@ -195,6 +200,10 @@ export class MaxwellSceneSolver extends MaxwellSampler {
         const sigma = o.conductivity ?? 0.01;
         if (!(sigma >= 0 && Number.isFinite(sigma)) || sigma * this.core.dt / EPS0 > this.explicitOhmLimit()) throw new Error(`${o.name}: conductivity is too stiff for the combined wave/current stability limit. Reduce CFL, refine the grid or explicitly choose a lower conductivity; no hidden conductivity cap is applied.`);
       }
+      if (isCharge(o) || isParticle(o)) {
+        if (o.sourceProfile !== undefined && o.sourceProfile !== 'cic' && o.sourceProfile !== 'smooth') throw new Error(`${o.name}: unsupported charge source profile.`);
+        if (o.sourceProfile === 'smooth' && !(Number.isFinite(o.sourceWidth) && o.sourceWidth! > 0)) throw new Error(`${o.name}: smooth source width must be finite and positive in metres.`);
+      }
       if (isParticle(o) && usesParticleDynamics(o) && !((o.dynamics?.mass ?? o.mass) > 0)) throw new Error(`${o.name}: particle mass must be positive.`);
       if (o.dynamics?.mode === 'forceDriven' && (!(o.dynamics.mass > 0) || o.dynamics.inertia.some(v => !(v > 0)))) throw new Error(`${o.name}: force-driven mass and principal inertia must be positive.`);
     }
@@ -205,6 +214,15 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     const { center, size } = this.scene.domain;
     for (const original of this.scene.objects.filter(o => o.visible)) {
       const o = this.pose(original, time);
+      // Smooth density is defined in laboratory axes, independently of object rotation.
+      const width = this.sourceWidth(o);
+      if (width !== undefined) {
+        if (o.position.some((v, a) => !Number.isFinite(v) || v - 2 * width < center[a] - size[a] / 2 || v + 2 * width > center[a] + size[a] / 2)) throw new Error(`${o.name}: smooth source support left the physical domain. Enlarge the domain or reduce its explicit width.`);
+        const spacing = [this.core.dx, this.core.dy, this.core.dz];
+        if (o.position.some((v, a) => this.scene.simulation.boundary[(['x', 'y', 'z'] as const)[a]] === 'pec' &&
+          (v - 2 * width < center[a] - size[a] / 2 + spacing[a] || v + 2 * width > center[a] + size[a] / 2 - spacing[a]))) throw new Error(`${o.name}: smooth source assignment reaches a PEC wall. Leave at least one grid cell between the full density support and that wall; source/wall contact is unsupported.`);
+        continue;
+      }
       let half: Vec3;
       if (isConductor(o) || isDielectric(o)) half = o.size.map(v => v / 2) as Vec3;
       else if (isMagnet(o)) {
@@ -482,12 +500,43 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     // No Biot-Savart field is added to samples during the run.
   }
 
+  private sourceWidth(object: SceneObject): number | undefined {
+    return (isCharge(object) || isParticle(object)) && object.sourceProfile === 'smooth' ? object.sourceWidth : undefined;
+  }
+
+  /** Force fields for the explicitly selected source shape. Point probes remain local. */
+  sampleSourceForForce(object: SceneObject, point: Vec3) {
+    const width = this.sourceWidth(object);
+    if (width === undefined) return this.sampleForForce(point);
+    const s = this.core, center = this.gridPoint(point);
+    const E = gatherSmoothElectric(s.Ex, s.Ey, s.Ez, s, center, width);
+    const w = smoothChargeWeights(s, center, width), B: Vec3 = [0, 0, 0];
+    const stride = [1, s.nx, s.nx * s.ny];
+    // Average synchronized face B to charge nodes, then integrate the full
+    // finite charge shape. This magnetic rotation does no particle work;
+    // full field-plus-particle momentum acceptance remains a separate audit.
+    for (let k = 0; k < s.nz; k++) if (w.z[k] !== 0) for (let j = 0; j < s.ny; j++) if (w.y[j] !== 0) for (let i = 0; i < s.nx; i++) {
+      const weight = w.x[i] * w.y[j] * w.z[k];
+      if (weight === 0) continue;
+      const node = i + s.nx * (j + s.ny * k), coordinate = [i, j, k];
+      for (const a of [0, 1, 2] as const) {
+        const b = (a + 1) % 3, c = (a + 2) % 3;
+        let sum = s.synchronizedB(a, node);
+        if (coordinate[b] > 0) sum += s.synchronizedB(a, node - stride[b]);
+        if (coordinate[c] > 0) sum += s.synchronizedB(a, node - stride[c]);
+        if (coordinate[b] > 0 && coordinate[c] > 0) sum += s.synchronizedB(a, node - stride[b] - stride[c]);
+        B[a] += weight * sum / 4;
+      }
+    }
+    return { E, B };
+  }
+
   private sourceParticleState() {
     let kinetic = 0, count = 0;
     const momentum: Vec3 = [0, 0, 0];
     for (const object of this.scene.objects) if (object.visible && usesParticleDynamics(object) && (isCharge(object) || isParticle(object))) {
       const body = this.bodies.get(object.id)!, mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1);
-      const field = this.sampleForForce(body.position);
+      const field = this.sampleSourceForForce(object, body.position);
       // The integrator stores p at t-dt/2. This reversible half kick estimates
       // integer-time momentum without altering the accepted particle state.
       const p = advanceParticle(body.position, body.momentum, object.charge, mass, field.E, field.B, this.core.dt / 2).momentum;
@@ -504,7 +553,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       const b = this.bodies.get(object.id)!;
       const forceDriven = object.dynamics?.mode === 'forceDriven';
       if (usesParticleDynamics(object)) {
-        const mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1), field = this.sampleForForce(b.position);
+        const mass = object.dynamics?.mass ?? (isParticle(object) ? object.mass : 1), field = this.sampleSourceForForce(object, b.position);
         const p = advanceParticle(b.position, b.momentum, 'charge' in object ? object.charge : 0, mass, field.E, field.B, this.core.dt);
         // E and synchronized B are sampled at x^n,t^n; p is staggered at
         // n-1/2 -> n+1/2, then the conserved trajectory drifts x^n -> x^(n+1).
@@ -681,9 +730,11 @@ export class MaxwellSceneSolver extends MaxwellSampler {
         const to = localToWorld(this.pose(charge.object, this.time + s.dt), charge.local);
         const velocity = before[c].map((v, n) => (to[n] - v) / s.dt) as Vec3;
         validateSubluminalVelocity(velocity);
-        depositTrajectory(s.Jx, s.Jy, s.Jz, s, this.gridPoint(before[c]), this.gridPoint(to), charge.charge, s.dt);
+        const width = this.sourceWidth(charge.object), fromGrid = this.gridPoint(before[c]), toGrid = this.gridPoint(to);
+        if (width !== undefined) depositSmoothTrajectory(s.Jx, s.Jy, s.Jz, s, fromGrid, toGrid, width, charge.charge, s.dt);
+        else depositTrajectory(s.Jx, s.Jy, s.Jz, s, fromGrid, toGrid, charge.charge, s.dt);
         if (usesParticleDynamics(charge.object)) {
-          const weights = trajectoryWeights(s, this.gridPoint(before[c]), this.gridPoint(to)), fields = [s.Ex, s.Ey, s.Ez];
+          const weights = width !== undefined ? smoothTrajectoryWeights(s, fromGrid, toGrid, width) : trajectoryWeights(s, fromGrid, toGrid), fields = [s.Ex, s.Ey, s.Ez];
           particleSteps.push({ q: charge.charge, weights, voltage: weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0) });
         }
       });

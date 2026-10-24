@@ -48,7 +48,18 @@ export interface SceneObjectBase {
   dynamics?: BodyDynamics;
 }
 
-export interface ChargeObject extends SceneObjectBase {
+/** Maxwell source assignment; approximation mode retains these parameters without applying them. */
+export interface ChargeSourceProfile {
+  /** Missing preserves the legacy grid-sized cloud-in-cell assignment. */
+  sourceProfile?: 'cic' | 'smooth';
+  /** Smooth cubic B-spline width in metres; physical support is center ±2 widths on each lab axis.
+   * Rotation does not rotate this separable density; no Lorentz contraction is applied.
+   * The entire support must remain inside the physical domain.
+   */
+  sourceWidth?: number;
+}
+
+export interface ChargeObject extends SceneObjectBase, ChargeSourceProfile {
   kind: 'charge';
   charge: number; // C
   color?: string;
@@ -132,7 +143,7 @@ export interface MagnetObject extends SceneObjectBase {
 
 export type ParticleSpecies = 'electron' | 'proton' | 'custom';
 
-export interface ParticleObject extends SceneObjectBase {
+export interface ParticleObject extends SceneObjectBase, ChargeSourceProfile {
   kind: 'particle';
   species: ParticleSpecies;
   charge: number; // C

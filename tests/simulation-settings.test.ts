@@ -1,13 +1,41 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { restoreScene } from '../src/app/restoreScene';
 import { useAppStore } from '../src/app/store';
-import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil, makeDielectric } from '../src/scene/defaults';
+import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil, makeDielectric, makeCharge, makeParticle } from '../src/scene/defaults';
 import { getPreset } from '../src/scene/presets';
 
 const initial = useAppStore.getState();
 afterEach(() => useAppStore.setState(initial, true));
 
 describe('simulation model migration', () => {
+  it.each([makeCharge(), makeParticle()])('retains undefined legacy $kind source profiles through reload, rewind and solver switches', object => {
+    const scene = makeScene({ name: 'legacy source', objects: [object] });
+    useAppStore.setState({ scene });
+    for (const useApproximation of [false, true, false]) {
+      useAppStore.getState().setSimulation({ useApproximation });
+      useAppStore.getState().rewindSimulation();
+      const restored = restoreScene(JSON.parse(JSON.stringify(useAppStore.getState().scene)), scene)!;
+      expect(restored.objects[0]).not.toHaveProperty('sourceProfile');
+      expect(restored.objects[0]).not.toHaveProperty('sourceWidth');
+    }
+  });
+
+  it.each([makeCharge(), makeParticle()])('preserves explicit $kind source shape and dormant SI width through export, rewind and solver switches', object => {
+    const scene = makeScene({ name: 'finite source', objects: [object] });
+    useAppStore.setState({ scene });
+    useAppStore.getState().updateObject(object.id, { sourceProfile: 'smooth', sourceWidth: 0.073 });
+    for (const sourceProfile of ['smooth', 'cic', 'smooth'] as const) {
+      useAppStore.getState().updateObject(object.id, { sourceProfile });
+      for (const useApproximation of [false, true]) {
+        useAppStore.getState().setSimulation({ useApproximation });
+        useAppStore.getState().rewindSimulation();
+        const restored = restoreScene(JSON.parse(JSON.stringify(useAppStore.getState().scene)), scene)!;
+        expect(restored.objects[0]).toMatchObject({ sourceProfile, sourceWidth: 0.073 });
+        expect(restored.simulation.useApproximation).toBe(useApproximation);
+      }
+    }
+  });
+
   it('provides a neutral Maxwell charging capacitor with explicit stationary terminal contacts and a visible return route', () => {
     const preset = getPreset('maxwell-charging-capacitor');
     expect(preset).toBeDefined();

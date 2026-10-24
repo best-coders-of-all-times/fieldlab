@@ -18,7 +18,7 @@ import {
   Toggle,
   Vec3Input,
 } from './controls';
-import type { SceneObject, SliceQuantity } from '../scene/types';
+import type { ChargeObject, ParticleObject, SceneObject, SliceQuantity } from '../scene/types';
 import {
   isAntenna,
   isCharge,
@@ -172,6 +172,7 @@ function ObjectPhysics({
           format={(v) => `${v.toFixed(2)} nC`}
           onChange={(v) => patch({ charge: v * 1e-9 })}
         />
+        <SourceProfile obj={obj} patch={patch} fullMaxwell={fullMaxwell} />
         <div className="note">Positive charges emit field lines; negative charges absorb them. Magnitude controls line count and glyph size.</div>
       </PanelSection>
     );
@@ -375,6 +376,7 @@ function ObjectPhysics({
         <Field label="Mass">
           <NumberInput value={obj.mass} step={1e-31} unit="kg" onChange={(v) => patch({ mass: Math.max(1e-31, v), species: 'custom' })} />
         </Field>
+        <SourceProfile obj={obj} patch={patch} fullMaxwell={fullMaxwell} />
         {!fullMaxwell && <Field label="Initial velocity">
           <Vec3Input value={obj.velocity} step={1e5} unit="m/s" onChange={(v) => patch({ velocity: v })} />
         </Field>}
@@ -474,6 +476,34 @@ function ObjectPhysics({
     );
   }
   return null;
+}
+
+function SourceProfile({ obj, patch, fullMaxwell }: {
+  obj: ChargeObject | ParticleObject;
+  patch: (p: Partial<SceneObject>) => void;
+  fullMaxwell: boolean;
+}) {
+  const smooth = obj.sourceProfile === 'smooth';
+  if (!fullMaxwell && !smooth) return null;
+  const sourceWidth = obj.sourceWidth ?? 0.05;
+  return <>
+    <Field label="Source profile" hint="Charge assignment used only by the full Maxwell solver">
+      <Select value={obj.sourceProfile ?? 'cic'} options={[
+        { value: 'cic', label: 'Legacy grid CIC' },
+        { value: 'smooth', label: 'Finite smooth cloud' },
+      ]} onChange={sourceProfile => patch({ sourceProfile, ...(sourceProfile === 'smooth' ? { sourceWidth } : {}) })} />
+    </Field>
+    {smooth && <>
+      <Field label="Source width" hint="Positive physical B-spline width in metres, independent of grid spacing">
+        <NumberInput value={sourceWidth} min={0} step={0.005} unit="m" onChange={width => {
+          if (Number.isFinite(width) && width > 0) patch({ sourceWidth: width });
+        }} />
+      </Field>
+      <div className="note">Separable compact cubic B-spline density with support center ±2 widths on each lab axis. Rotation does not rotate the density; no Lorentz contraction is applied. The full support must remain inside the physical domain, with one extra grid cell before a PEC wall. Coarse clouds can experience artificial mesh self-force. Resolve the width with multiple cells and check spatial and time convergence.</div>
+      {!fullMaxwell && <div className="note warn" role="alert">Smooth source profile is inactive in approximation mode. {obj.kind === 'charge' ? 'The charge uses the analytic point-charge field.' : 'This particle remains a test particle and does not source the fields.'} Profile and width remain saved for Maxwell mode.</div>}
+    </>}
+    {fullMaxwell && <div className="note">{smooth ? '' : 'Legacy CIC has a grid-dependent effective source size. '}Force-driven coupling is experimental; coupled energy conservation has not been validated.</div>}
+  </>;
 }
 
 function FilamentElectrical({ obj, patch }: {

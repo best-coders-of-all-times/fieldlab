@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { makeCharge, makeScene, makeLoop, makeDielectric, makeWire } from '../src/scene/defaults';
+import { makeCharge, makeScene, makeLoop, makeDielectric, makeWire, makeParticle } from '../src/scene/defaults';
 import { useAppStore } from '../src/app/store';
 import { SimulationController } from '../src/app/controller';
 
@@ -82,5 +82,33 @@ it('ignores a reached-target flag from an earlier pacing configuration in the sa
   controller.update({ ...scene, simulation: { ...scene.simulation, targetTime: 2e-9 } }, true);
   worker.onmessage({ data: { ...frame, time: 2e-9, steps: 20 } });
   expect(useAppStore.getState().playing).toBe(false);
+  controller.dispose();
+});
+
+it('rebuilds Maxwell particle physics for source profile and width edits while preserving display-only trail edits', () => {
+  vi.useFakeTimers();
+  const workers: any[] = [];
+  vi.stubGlobal('Worker', class { messages: any[] = []; onmessage: any; constructor() { workers.push(this); } postMessage(m: unknown) { this.messages.push(m); } terminate() {} });
+  const particle = makeParticle(), scene = makeScene({ name: 'particle shape edits', objects: [particle] });
+  scene.simulation.useApproximation = false;
+  const controller = new SimulationController(); controller.update(scene, false);
+  const original = workers[0], generation = original.messages[0].generation;
+  const smooth = { ...scene, objects: [{ ...particle, sourceProfile: 'smooth' as const, sourceWidth: 0.05 }] };
+  controller.update(smooth, false);
+  expect(original.messages.at(-1).type).toBe('pause');
+  useAppStore.getState().setTime(0);
+  original.onmessage({ data: { type: 'frame', generation, time: 10 } });
+  expect(useAppStore.getState().time).toBe(0);
+  vi.advanceTimersByTime(170);
+  expect(workers).toHaveLength(2);
+  expect(workers[1].messages[0].scene.objects[0]).toMatchObject({ sourceProfile: 'smooth', sourceWidth: 0.05 });
+  const wider = { ...smooth, objects: [{ ...smooth.objects[0], sourceWidth: 0.075 }] };
+  controller.update(wider, false); vi.advanceTimersByTime(170);
+  expect(workers).toHaveLength(3);
+  expect(workers[2].messages[0].scene.objects[0].sourceWidth).toBe(0.075);
+  controller.update({ ...wider, objects: [{ ...wider.objects[0], trailLength: particle.trailLength + 100 }] }, false);
+  vi.advanceTimersByTime(170);
+  expect(workers).toHaveLength(3);
+  expect(workers[2].messages.at(-2).type).toBe('config');
   controller.dispose();
 });

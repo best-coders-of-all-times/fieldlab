@@ -28,7 +28,7 @@ For quasistatics, `L/(cT) ≪ 1` and `v/c ≪ 1` are useful conditions, but do n
 
 ## Experimental Maxwell models
 
-- Point charges and source particles deposit finite-grid charge/current. Spheres/shells use discrete charge samples. These numerical shapes are not continuum point-charge self-force models.
+- Point charges and source particles deposit finite-grid charge/current. In full mode their **Source profile** can explicitly select a finite smooth cloud with a width in metres; its density has support center +/-2 widths in each lab axis. Legacy files retain CIC. Width and source history must be resolved; coarse clouds exhibit mesh self-force. Spheres/shells use discrete charge samples. These numerical shapes are not continuum point-charge self-force models.
 - Stationary linear, isotropic, nondispersive dielectrics support relative permittivity, permeability and conductivity. Moving dielectrics are rejected.
 - Conductors require **Initialize plate voltages, then isolate** in Solve. Authored voltages or floating net charges prepare the initial charge; subsequent evolution uses isolated finite-conductivity bodies. There is no implicit battery or continuing voltage clamp. A wire can explicitly select Terminal current feed, two stationary bodies, a visible return route and a rise time. Excessive conductivity gives a stability error.
 - Permanent magnets are impressed magnetization sources in the authored laboratory shape, including prescribed motion and bound charge/current. This is not a hysteresis, micromagnetic, demagnetization, rest-shape contraction or force-driven magnet model.
@@ -66,7 +66,8 @@ npm run bench:maxwell -- --json artifacts/maxwell-benchmark.json --report docs/m
 ## Validation and remaining work
 
 - [CPU Float32 storage comparison](docs/maxwell-precision-validation.md): optional kernel storage against the Float64 reference. The website still uses Float64; this is not WebGPU parity.
-- [Coupled source audit](docs/maxwell-coupling-validation.md): the current force-driven point/sphere coupling fails energy acceptance. Data exposes particle kinetic energy, deposited-current work and their mismatch; these diagnostics do not correct the coupling.
+- [Smooth finite-source model](docs/maxwell-smooth-source-validation.md): analytic density assignment, conserved motion current and compatible electric force gathering, including support and self-force limits.
+- [Coupled source audit](docs/maxwell-coupling-validation.md): legacy force-driven point/sphere coupling fails energy acceptance; selected smooth-cloud cases now show energy refinement, with mesh self-force and incomplete momentum acceptance recorded. Data exposes particle kinetic energy, deposited-current work and their mismatch; these diagnostics do not correct the coupling.
 - [Numerical core validation](docs/maxwell-core-validation.md): specified Fresnel amplitudes, stationary cavity frequency, finite-conductivity attenuation/loss and selected normal/oblique CPML pulses, with refinement and exclusions.
 - [Native Meep comparison](docs/maxwell-meep-validation.md): actual Meep 1.35.0 source-free periodic standing waves in vacuum and relative permittivity 4. Maximum selected CPU/Meep RMS difference is `2.51e-16`; continuum error is reported separately and converges at second order. This does not validate moving bodies, charge sources or CPML.
 - [Physics model and evidence](docs/physics-model.md): source initialization, moving-charge refinement, observable meanings and force/material limitations.

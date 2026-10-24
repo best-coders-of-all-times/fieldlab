@@ -31,7 +31,7 @@ With approximation retained, `fdtd/fdtd3d.ts` advances Yee-style Faraday and Amp
 
 ## Experimental Maxwell kernel and clock
 
-`engine/maxwell/yee.ts` stores Float64 electric/current components on edges, magnetic components on faces and charge on nodes. Compatible curl/divergence operators advance fields and nodal charge. `deposition.ts` deposits finite cloud-in-cell charge trajectories with matching discrete continuity. The adapter supplies current from its source/matter models; runtime E/B come from field evolution, without an independent Biot–Savart overlay added to the answer.
+`engine/maxwell/yee.ts` uses Float64 in the website and offers separately tested optional CPU Float32 storage. It stores electric/current components on edges, magnetic components on faces and charge on nodes. Compatible curl/divergence operators advance fields and nodal charge. `deposition.ts` deposits finite cloud-in-cell charge trajectories with matching discrete continuity. The adapter supplies current from its source/matter models; runtime E/B come from field evolution, without an independent Biot–Savart overlay added to the answer.
 
 Field steps, source trajectories, source particles and runtime body poses share physical dt. The dedicated browser worker returns step, time, generation, probes, transforms and diagnostics. Rendering consumes accepted frames rather than driving a second wall-clock Maxwell motion oscillator. Restart invalidates old generations, including replies already in flight.
 
@@ -43,7 +43,7 @@ Initialization prepares electrostatic E/charge with finite-domain boundary/elect
 
 | Object/model | Current behavior | Important limit |
 | --- | --- | --- |
-| Point charge / source particle | Grid-scale cloud-in-cell charge and conserved trajectory current; prescribed or field-driven motion | Finite shape, not continuum point self-force or separate radiation reaction. Closed deposition-domain exits are rejected. |
+| Point charge / source particle | Legacy grid CIC or explicitly selected physical-width smooth cloud, conserved trajectory current, prescribed or field-driven motion | Finite source model, not continuum point self-force. Smooth density is fixed in lab axes without Lorentz contraction; coarse mesh self-force and legacy energy-coupling failures are documented. Physical-domain exits are rejected. |
 | Sphere/shell | Distributed charge samples: four radial shells for a solid, 48 angular samples per shell | Quadrature and grid require refinement; no analytic sphere formula during Maxwell evolution. |
 | Wire/loop/coil | Stationary impressed current, explicitly selected resolved passive material, or a wire terminal current feed | Passive wires share the finite-conductivity body model. Diameter must span three cells; no automatic enlargement or separate-body electrical contact. Impressed filaments cannot move. |
 | Electric point source / antenna | Current deposition; amplitude in amperes | Magnetic point-current components and moving driven sources are rejected; no general calibrated port. |
@@ -51,6 +51,14 @@ Initialization prepares electrostatic E/charge with finite-domain boundary/elect
 | Stationary dielectric | Staircased background epsilon_r, mu_r and conductivity; optional Drude carrier response | One local Drude pole with specified SI parameters; no hysteresis or general moving constitutive response. |
 | Conductor | Initialized isolated charge, finite conductivity and transported body-owned charge | Not a moving PEC, voltage supply or validated arbitrary moving interface. |
 | Permanent magnet | Prescribed laboratory-shape impressed polarization/magnetization, including motion | No force-driven magnet, rest-shape contraction, hysteresis or internal magnetic relaxation. |
+
+### Finite smooth source profile
+
+Point-charge and particle inspectors can explicitly select a separable compact cubic B-spline density with width in metres and support center +/-2 widths per lab axis. Its analytic integral against charge tents avoids point-quadrature alignment errors. Endpoint-exact currents satisfy discrete continuity; native electric force gathering is adjoint to the center derivative of that assignment. Initial momentum staggering, current-work diagnostics and replay use the selected profile. Undefined profiles remain legacy CIC; approximation retains but does not use the smooth settings.
+
+Complete density support stays inside the physical domain, with one additional grid cell before bare PEC walls to prevent unsupported charge/force assignment contact. The cloud profile is independent of object rotation and has no rest-shape contraction. The [source report](maxwell-smooth-source-validation.md) and [actual coupled audit](maxwell-coupling-validation.md) document selected energy refinement and residual phase-dependent mesh self-force. Selected smooth-cloud energy error decreases by about four with halved dt; legacy point/sphere coupling remains unaccepted. A full momentum/stress and passive-body energy budget is still required.
+
+Data separates source-particle kinetic energy (an integer-time half-kick estimate), actual deposited-current work and their residual. These readouts concern force-driven point/source particles, excluding prescribed motion and rigid bodies. A residual warning exposes measured disagreement; it never rescales mechanical energy or modifies fields to enforce a balance.
 
 ### Explicit terminal current feeds
 
