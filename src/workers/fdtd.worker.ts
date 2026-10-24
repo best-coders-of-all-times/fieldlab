@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { FdtdSolver } from '../engine/fdtd/fdtd3d';
+import { MaxwellSceneSolver } from '../engine/maxwell/sceneSolver';
 import type { FdtdFrame, FdtdRequest, FdtdResponse, WaveSlice } from './protocol';
 import type { Scene, SliceQuantity } from '../scene/types';
 import { isProbe } from '../scene/types';
@@ -12,7 +13,7 @@ interface WorkerCtx {
 
 const ctx = self as unknown as WorkerCtx;
 
-let solver: FdtdSolver | null = null;
+let solver: FdtdSolver | MaxwellSceneSolver | null = null;
 let scene: Scene | null = null;
 let generation = -1;
 let running = false;
@@ -25,7 +26,16 @@ function post(message: FdtdResponse, transfer?: Transferable[]): void {
 function requestFrame(): void {
   if (!running || scheduled || !solver) return;
   scheduled = true;
-  ctx.setTimeout(tick, 0);
+  const requestedGeneration = generation;
+  ctx.setTimeout(() => { if (generation === requestedGeneration) tick(); }, 0);
+}
+
+function publishFrame(): void {
+  const frame = buildFrame(), transfer: Transferable[] = [];
+  for (const slice of frame.slices) transfer.push(slice.data.buffer);
+  if (frame.lattice) transfer.push(frame.lattice.positions.buffer, frame.lattice.vectors.buffer, frame.lattice.magnitudes.buffer);
+  for (const line of frame.lines?.lines ?? []) transfer.push(line.points.buffer, line.magnitudes.buffer);
+  post(frame, transfer);
 }
 
 function tick(): void {
@@ -34,17 +44,7 @@ function tick(): void {
   try {
     const steps = Math.max(1, Math.min(20, scene.simulation.stepsPerFrame));
     solver.step(steps);
-    const frame = buildFrame();
-    const transfer: Transferable[] = [];
-    for (const s of frame.slices) transfer.push(s.data.buffer);
-    if (frame.lattice) {
-      transfer.push(
-        frame.lattice.positions.buffer,
-        frame.lattice.vectors.buffer,
-        frame.lattice.magnitudes.buffer,
-      );
-    }
-    post(frame, transfer);
+    publishFrame();
   } catch (err) {
     running = false;
     post({
@@ -62,6 +62,7 @@ function sliceQuantity(scene: Scene): SliceQuantity {
 }
 
 function buildFrame(): FdtdFrame {
+  const started = performance.now();
   const s = solver!;
   const sc = scene!;
   const slices: WaveSlice[] = [];
@@ -85,8 +86,12 @@ function buildFrame(): FdtdFrame {
   const probes = sc.objects
     .filter(isProbe)
     .filter(p => p.visible)
-    .map((p) => ({ id: p.id, position: p.position, sample: s.sample(p.position) }));
-  return {
+    .map((p) => {
+      const position = s instanceof MaxwellSceneSolver ? s.pose(p).position : p.position;
+      return { id: p.id, position, sample: s.sample(position) };
+    });
+  const diagnostics: Record<string, number> | undefined = s instanceof MaxwellSceneSolver ? s.diagnostics() : undefined;
+  const frame: FdtdFrame = {
     type: 'frame',
     generation,
     time: s.time,
@@ -95,8 +100,15 @@ function buildFrame(): FdtdFrame {
     slices,
     lattice,
     probes,
-    energy: s.energy(),
+    energy: diagnostics ? { electric: diagnostics.electricEnergy, magnetic: diagnostics.magneticEnergy } : s.energy(),
+    ...(s instanceof MaxwellSceneSolver ? {
+      transforms: s.poses(),
+      lines: sc.display.fieldLines === 'none' ? undefined : { field: sc.display.fieldLines, lines: s.fieldLines(sc.display.fieldLines, sc.display.lineCount) },
+      diagnostics,
+    } : {}),
   };
+  if (diagnostics) diagnostics.samplingMs = performance.now() - started;
+  return frame;
 }
 
 function init(msg: Extract<FdtdRequest, { type: 'init' }>): void {
@@ -104,9 +116,9 @@ function init(msg: Extract<FdtdRequest, { type: 'init' }>): void {
   scene = msg.scene;
   running = false;
   scheduled = false;
-  solver = new FdtdSolver(msg.scene);
+  solver = msg.scene.simulation.useApproximation === false ? new MaxwellSceneSolver(msg.scene) : new FdtdSolver(msg.scene);
   post({ type: 'ready', generation, meta: solver.meta });
-  post(buildFrame());
+  publishFrame();
 }
 
 ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
@@ -120,7 +132,8 @@ ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
     if ('generation' in msg && msg.generation !== generation) return;
     if (msg.type === 'config') {
       scene = msg.scene;
-      if (!running) post(buildFrame());
+      if (solver instanceof MaxwellSceneSolver) solver.scene.display = scene.display;
+      if (!running) publishFrame();
       return;
     }
     if (msg.type === 'start') {
@@ -134,13 +147,13 @@ ctx.onmessage = (event: MessageEvent<FdtdRequest>) => {
     }
     if (msg.type === 'reset') {
       solver.reset();
-      if (scene) post(buildFrame());
+      if (scene) publishFrame();
       return;
     }
     if (msg.type === 'singleStep') {
       if (scene) {
-        solver.step(Math.max(1, scene.simulation.stepsPerFrame));
-        post(buildFrame());
+        solver.step(Math.max(1, Math.min(20, Math.floor(scene.simulation.stepsPerFrame) || 1)));
+        publishFrame();
       }
     }
   } catch (err) {

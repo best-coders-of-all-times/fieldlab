@@ -19,13 +19,15 @@ import { useAppStore } from './store';
 function physicsKey(scene: Scene): string {
   return JSON.stringify({
     mode: scene.mode,
+    useApproximation: scene.simulation.useApproximation,
+    maxwellConductorModel: scene.simulation.maxwellConductorModel,
     domain: scene.domain,
     objects: scene.objects
       .filter((o) => !isProbe(o) || o.motion)
       .map((o) => isParticle(o)
         // Trail length is purely visual; changing it should not restart the orbit.
         ? { kind: o.kind, id: o.id, position: o.position, velocity: o.velocity,
-            charge: o.charge, mass: o.mass, visible: o.visible, motion: o.motion }
+            charge: o.charge, mass: o.mass, visible: o.visible, motion: o.motion, dynamics: o.dynamics }
         : { ...o, visible: o.visible }),
     resolution: scene.simulation.resolution,
     staticBoundary: scene.simulation.staticBoundary,
@@ -87,6 +89,15 @@ export class SimulationController {
         this.initialized = true;
         this.reinit(scene);
       } else {
+        // Stop accepting old-scene results immediately; debounce construction
+        // only. A continuous drag must not keep an obsolete scene running.
+        if (!this.reinitTimer) {
+          this.generation++;
+          this.fdtdWorker?.postMessage({ type: 'pause' } as FdtdRequest);
+          this.stopParticles();
+          this.staticsReady = false;
+          this.fdtdReady = false;
+        }
         if (this.reinitTimer) clearTimeout(this.reinitTimer);
         this.reinitTimer = setTimeout(() => {
           this.reinitTimer = null;
@@ -101,10 +112,10 @@ export class SimulationController {
 
     if (dKey !== this.display) {
       this.display = dKey;
-      if (scene.mode === 'fields') this.scheduleStaticsDisplay();
+      if (scene.mode === 'fields' && scene.simulation.useApproximation !== false) this.scheduleStaticsDisplay();
     }
 
-    if (scene.mode === 'waves') {
+    if (scene.mode === 'waves' || scene.simulation.useApproximation === false) {
       this.fdtdWorker?.postMessage({ type: 'config', generation: this.generation, scene } as FdtdRequest);
       this.fdtdWorker?.postMessage({ type: playing ? 'start' : 'pause' } as FdtdRequest);
     }
@@ -132,7 +143,13 @@ export class SimulationController {
     useAppStore.getState().setFdtdMeta(null);
     useAppStore.setState({ measurements: {} });
 
-    if (scene.mode === 'fields') {
+    if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && o.dynamics?.mode === 'forceDriven')) {
+      this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
+      this.fail('Force-driven source bodies require Maxwell mode. Disable “Use approximation”, or choose fixed/prescribed motion. Legacy test particles remain available without a body dynamics override.');
+      return;
+    }
+
+    if (scene.mode === 'fields' && scene.simulation.useApproximation !== false) {
       this.terminateFdtd();
       fieldBus.emit('fdtd-clear', undefined);
       this.terminateStatics();
@@ -332,12 +349,19 @@ export class SimulationController {
         position: p.position,
         E: p.sample.E,
         B: p.sample.B,
+        D: p.sample.D,
+        H: p.sample.H,
+        J: p.sample.J,
+        rho: p.sample.rho,
         phi: 0,
         Emag: p.sample.Emag,
         Bmag: p.sample.Bmag,
       }));
       store.setProbes(probes);
       fieldBus.emit('fdtd-frame', msg);
+      if (msg.transforms) fieldBus.emit('induction-frame', { time: msg.time, transforms: msg.transforms, readings: [] });
+      if (msg.lines) fieldBus.emit('statics-lines', msg.lines);
+      if (msg.diagnostics) store.setMeasurements({ extra: { ...msg.diagnostics, steps: msg.steps } });
       const now = performance.now();
       if (now - this.lastChartAt > 70 && probes.length > 0) {
         this.lastChartAt = now;
@@ -356,14 +380,14 @@ export class SimulationController {
 
   play(playing: boolean): void {
     this.playing = playing;
-    if (this.mode === 'waves') {
+    if (this.mode === 'waves' || this.scene?.simulation.useApproximation === false) {
       this.fdtdWorker?.postMessage({ type: playing ? 'start' : 'pause' } as FdtdRequest);
     }
     this.syncParticleLoop();
   }
 
   step(): void {
-    if (this.mode === 'waves') {
+    if (this.mode === 'waves' || this.scene?.simulation.useApproximation === false) {
       this.fdtdWorker?.postMessage({ type: 'pause' } as FdtdRequest);
       this.fdtdWorker?.postMessage({ type: 'singleStep' } as FdtdRequest);
     } else {
@@ -397,7 +421,7 @@ export class SimulationController {
   }
 
   private syncParticleLoop(): void {
-    const shouldRun = !this.disposed && this.mode === 'fields' && this.playing && (!!this.particles || !!this.induction);
+    const shouldRun = !this.disposed && this.mode === 'fields' && this.scene?.simulation.useApproximation !== false && this.playing && (!!this.particles || !!this.induction);
     if (!shouldRun) {
       this.stopParticles();
       return;

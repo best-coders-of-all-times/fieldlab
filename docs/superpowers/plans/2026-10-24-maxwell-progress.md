@@ -1,0 +1,43 @@
+# Maxwell implementation progress
+
+Plan: `2026-10-24-full-maxwell-fdtd.md`.
+
+Rollback: commit `236145c`, tag `checkpoint-before-maxwell-2026-10-24`; implementation branch `feature/maxwell-engine`.
+
+Baseline verified: 38 tests and production build pass (existing bundle-size warning).
+
+The user approved implementation and additionally requested a cost-saving, explicitly labelled approximation option with validity conditions.
+
+Ruling: keep the current workspace on a dedicated branch rather than relocate the running website into a second worktree. The checkpoint preserves the current version; this keeps the user's existing launch path usable.
+
+Ruling: the approximation switch is explicit and saved. Existing scene files retain their previous solver unless switched. Unsupported full-Maxwell material/source models must give an actionable error, never fall back silently.
+
+Ruling: first moving conductive medium uses finite conductivity and transported charge, with its specified material law. Do not advertise an unvalidated moving PEC mask as a moving conductor solver. Voltage-initialized isolated conductors must be chosen explicitly; maintaining voltage requires explicit feeds.
+
+| Milestone | Dependencies / shared contracts | Status |
+| --- | --- | --- |
+| M1 replay + approximation controls | Store resetRequest -> controller.reset; scene authored/runtime split | Implemented; store and browser replay tests pass. Old worker generations invalidated immediately on physical edits. |
+| M2 compatible Yee core | SI, edge E/J, face B, node rho; backward divJ, forward divB | Float64 CPU core verified for stated cases, including native Meep wave comparison; Float32/backend comparison remains. |
+| M3 materials/CPML | Core coefficient arrays; boundary diagnostics | Stationary epsilon/mu/conductivity, PEC and CPML tested quantitatively. Drude, general angle/frequency sweeps and boundary flux ledger remain. |
+| M4 sources/initialization | Conserved CIC trajectory deposition; scene compiler | Charges, impressed filaments, current dipoles, prescribed M/P sources and one-time electrostatic preparation integrated. Explicit voltage feeds and periodic scene adapter remain unsupported. |
+| M5 moving conductors | Conserved advection, specified rest-frame Ohm law, geometry | Experimental finite-conductivity bodies with separate owned charge. Stationary capacitor regression passes; full moving-capacitor, moving-interface and force/momentum validation remains. |
+| M6 force-driven dynamics | Shared physical dt, field gather, momentum/current deposition | Relativistic particle leapfrog, distributed charge forces and quaternion Newton-Euler integration implemented with focused tests. Passive wire feedback and comprehensive energy/momentum acceptance remain in progress. |
+| M7 browser integration/performance | Worker, overlays, single clock, migration, benchmarks | CPU browser worker, synchronized poses/probes/lines and measured benchmark implemented; GPU/backend validation and complete preset migration remain. |
+
+No milestone is accepted solely because it has implementation code. Numerical validation and limitations are recorded before completion claims.
+
+Ruling: present the new scene solver as experimental until the remaining moving-matter and force-feedback acceptance checks pass. The actual Maxwell curl evolution is implemented; this is not a claim that every gadget/material model in the plan is complete.
+
+Ruling: the static reference captured by CPML belongs only to preparation and boundary treatment. The time integrator never reapplies an electrostatic solution or adds an algebraic B-from-E field. An off-center static charge and a prepared stationary capacitor now remain free of artificial magnetic transients.
+
+Ruling: conductor transport must use per-body owned charge, including its own current divergence. Using total rho inside a transport halo was rejected by an observed failing regression: unrelated free charge was entrained and neighboring halos could double the current. Conductive edges join two material nodes, matching the initial equipotential staircase.
+
+Ruling: an unsupported periodic scene, transported driven filament, moving dielectric, magnetic point-current source, or clipped material must give an actionable error rather than silently switch solvers. The periodic core itself is separately validated, including native Meep reference fixtures.
+
+Evidence and reproducibility:
+
+- Native Meep 1.35.0 was installed under ignored `.reference-tools/` using WSL, without changing the website runtime or global system packages. `npm run check:meep` compares six native fixtures against the actual CPU kernel. Maximum normalized RMS difference: `2.51e-16`; smooth-wave continuum refinement ratios: about four. Scope: periodic vacuum and uniform dielectric standing waves only. See `docs/maxwell-meep-validation.md`.
+- `docs/maxwell-core-validation.md` records Fresnel amplitudes, PEC cavity frequency, conductive attenuation/loss and normal/oblique CPML reflection. Coarse-grid target misses are retained explicitly.
+- `docs/maxwell-performance.md` records actual CPU scene preparation, stepping, sampling, retained buffers and payload measurements. The admission estimate is conservative memory budgeting, not an exact allocation measurement.
+- A smooth-start uniform-velocity charge benchmark at 0.01c, after 4.008 ns, measured magnetic relative errors 7.147%, 1.817%, 0.676% at resolutions 16, 32, 64; electric errors 12.524%, 2.309%, 0.550%. Relative Gauss residuals stayed below `3e-15`. Abrupt current startup produced substantial mesh ringing; resolving source bandwidth and shape is required. See `tests/maxwell/moving-fields.test.ts`.
+- Browser checks verify edit-preserving rewind/replay, one field/pose/probe clock, isolated electrode initialization, magnetic response and paused display edits. These checks are workflow regressions, not a substitute for moving-body convergence benchmarks.

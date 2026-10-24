@@ -98,7 +98,7 @@ export type StaticsResponse =
 export interface FdtdProbeFrame {
   id: string;
   position: Vec3;
-  sample: FdtdSample;
+  sample: FdtdSample & { D?: Vec3; J?: Vec3; rho?: number };
 }
 
 export interface WaveSlice {
@@ -126,6 +126,10 @@ export interface FdtdFrame {
   };
   probes: FdtdProbeFrame[];
   energy: { electric: number; magnetic: number };
+  /** Present for the unified Maxwell engine; all poses share this frame time. */
+  transforms?: MotionTransform[];
+  lines?: { field: 'E' | 'B'; lines: FieldLineData[] };
+  diagnostics?: Record<string, number>;
 }
 
 export type FdtdRequest =
