@@ -2,11 +2,45 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { restoreScene } from '../src/app/restoreScene';
 import { useAppStore } from '../src/app/store';
 import { defaultSimulation, makeScene, makeConductor, makeWire, makeLoop, makeCoil, makeDielectric } from '../src/scene/defaults';
+import { getPreset } from '../src/scene/presets';
 
 const initial = useAppStore.getState();
 afterEach(() => useAppStore.setState(initial, true));
 
 describe('simulation model migration', () => {
+  it('provides a neutral Maxwell charging capacitor with explicit stationary terminal contacts and a visible return route', () => {
+    const preset = getPreset('maxwell-charging-capacitor');
+    expect(preset).toBeDefined();
+    const scene = preset!.create();
+    expect(scene.simulation).toMatchObject({ useApproximation: false, resolution: 16, maxwellConductorModel: 'isolated' });
+    const plates = scene.objects.filter(o => o.kind === 'conductor');
+    expect(plates).toHaveLength(2);
+    for (const plate of plates) {
+      expect(plate).toMatchObject({ shape: 'box', size: [0.125, 0.45, 0.5], floating: true, netCharge: 0, conductivity: 0.01 });
+      expect(plate.motion).toBeUndefined();
+    }
+    expect(plates.map(o => o.position)).toEqual([[-0.1875, 0, 0], [0.1875, 0, 0]]);
+    const feed = scene.objects.find(o => o.kind === 'wire');
+    expect(feed).toMatchObject({ electricalModel: 'currentFeed', current: 0.01, closed: false, path: 'polyline', position: [0, 0, 0],
+      terminalFeed: { from: plates[0].id, to: plates[1].id, riseTime: 1e-9 },
+      points: [[-0.1875, 0, 0], [-0.1875, -0.375, 0], [0.1875, -0.375, 0], [0.1875, 0, 0]] });
+    expect(feed?.motion).toBeUndefined();
+  });
+
+  it('retains terminal references, SI rise time and inactive current/conductivity across model switches and save reload', () => {
+    const wire = makeWire();
+    const from = makeConductor([-0.2, 0, 0]);
+    const to = makeConductor([0.2, 0, 0]);
+    const terminalFeed = { from: from.id, to: to.id, riseTime: 2e-9 };
+    useAppStore.setState({ scene: makeScene({ name: 'terminal feed', objects: [wire, from, to] }) });
+    useAppStore.getState().updateObject(wire.id, { electricalModel: 'currentFeed', terminalFeed, current: -0.02, conductivity: 0.025 });
+    for (const electricalModel of ['conducting', 'impressed', 'currentFeed'] as const) {
+      useAppStore.getState().updateObject(wire.id, { electricalModel });
+      const restored = restoreScene(JSON.parse(JSON.stringify(useAppStore.getState().scene)), makeScene({ name: 'base' }))!;
+      expect(restored.objects[0]).toMatchObject({ electricalModel, terminalFeed, current: -0.02, conductivity: 0.025 });
+    }
+  });
+
   it('keeps legacy dielectrics linear and round trips retained Drude parameters after switching to linear', () => {
     const legacy = makeScene({ name: 'legacy', objects: [makeDielectric()] });
     const restoredLegacy = restoreScene(JSON.parse(JSON.stringify(legacy)), makeScene({ name: 'base' }))!;

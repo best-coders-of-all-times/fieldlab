@@ -143,6 +143,12 @@ export class SimulationController {
     useAppStore.getState().setFdtdMeta(null);
     useAppStore.setState({ measurements: {} });
 
+    if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && o.kind === 'wire' && o.electricalModel === 'currentFeed')) {
+      this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
+      this.fail('Terminal current feeds require Maxwell mode. Disable "Use approximation", or explicitly select an impressed filament.');
+      return;
+    }
+
     if (scene.simulation.useApproximation !== false && scene.objects.some(o => o.visible && o.kind === 'dielectric' && o.materialModel === 'drude')) {
       this.stopParticles(); this.terminateStatics(); this.terminateFdtd();
       this.fail('Drude dispersion requires Maxwell mode. Disable "Use approximation", or explicitly choose a linear material.');

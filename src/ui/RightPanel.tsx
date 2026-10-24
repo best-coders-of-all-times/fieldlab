@@ -73,6 +73,7 @@ function Inspector() {
   const updateObject = useAppStore((s) => s.updateObject);
   const removeObject = useAppStore((s) => s.removeObject);
   const duplicateSelected = useAppStore((s) => s.duplicateSelected);
+  const measurements = useAppStore((s) => s.measurements);
   const obj = scene.objects.find((o) => o.id === selectedId);
 
   if (!obj) {
@@ -139,6 +140,10 @@ function Inspector() {
       {(scene.mode === 'fields' || scene.simulation.useApproximation === false) && obj.kind !== 'probe' && <MotionEditor obj={obj} patch={patch} />}
 
       <ObjectPhysics obj={obj} patch={patch} />
+
+      {scene.simulation.useApproximation === false && measurements.extra?.[`bodyCharge:${obj.id}`] !== undefined && <PanelSection title="Body charge">
+        <div className="stat-line"><span>Free charge</span><b>{formatPrefixed(measurements.extra[`bodyCharge:${obj.id}`], 'C')}</b></div>
+      </PanelSection>}
 
       <PanelSection title="About this object" defaultOpen={false}>
         <div className="note">{objectHelp(obj, scene.simulation.useApproximation === false)}</div>
@@ -290,7 +295,7 @@ function ObjectPhysics({
           const end = obj.points.at(-1) ?? [0, 0, 0];
           patch({ points: [...obj.points, [end[0] + 0.05, end[1] + 0.05, end[2]]] });
         }}>Add control point</Button>
-        <div className="note">{fullMaxwell ? obj.electricalModel === 'conducting' ? 'Current evolves in the resolved finite-conductivity wire; the stored impressed-current value is retained for switching back and is not applied.' : 'Impressed filament current in the authored direction. This source is externally driven; select passive finite conductivity for induced-current feedback.' : 'B is integrated with Biot–Savart over impressed filaments. Current direction is from the first point to the last.'}</div>
+        <div className="note">{obj.electricalModel === 'currentFeed' ? 'The visible path includes the feed and return lead. Positive current runs from the first point in the From body to the last point in the To body. Keep the full endpoint interpolation support inside each named body; unresolved contacts stop with an error.' : fullMaxwell ? obj.electricalModel === 'conducting' ? 'Current evolves in the resolved finite-conductivity wire; the stored impressed-current value is retained for switching back and is not applied.' : 'Impressed filament current in the authored direction. This source is externally driven; select passive finite conductivity for induced-current feedback.' : 'B is integrated with Biot–Savart over impressed filaments. Current direction is from the first point to the last.'}</div>
       </PanelSection>
     );
   }
@@ -477,14 +482,19 @@ function FilamentElectrical({ obj, patch }: {
   const scene = useAppStore(s => s.scene);
   const fullMaxwell = scene.simulation.useApproximation === false;
   const passive = obj.electricalModel === 'conducting';
+  const terminal = obj.kind === 'wire' && obj.electricalModel === 'currentFeed';
+  const contacts = obj.kind === 'wire' ? obj.terminalFeed ?? { from: '', to: '', riseTime: 1e-9 } : null;
+  const bodies = scene.objects.filter(body => body.visible && (body.kind === 'conductor' ||
+    ((body.kind === 'wire' || body.kind === 'loop' || body.kind === 'coil') && body.electricalModel === 'conducting')));
   const longest = Math.max(...scene.domain.size);
   const maxSpacing = Math.max(...scene.domain.size.map(size => size / Math.max(8, Math.round(scene.simulation.resolution * size / longest))));
   const minimumRadius = 1.5 * maxSpacing;
   return <>
-    {(fullMaxwell || passive) && <Field label="Electrical model">
+    {(fullMaxwell || passive || obj.kind === 'wire') && <Field label="Electrical model">
       <Select value={obj.electricalModel ?? 'impressed'} options={[
         { value: 'impressed', label: 'Impressed current (external drive)' },
         { value: 'conducting', label: 'Passive finite conductivity' },
+        ...(obj.kind === 'wire' ? [{ value: 'currentFeed' as const, label: 'Terminal current feed' }] : []),
       ]} onChange={electricalModel => patch({ electricalModel })} />
     </Field>}
     {passive ? <>
@@ -493,11 +503,27 @@ function FilamentElectrical({ obj, patch }: {
       {fullMaxwell && obj.wireRadius < minimumRadius && <div className="note warn" role="alert">Passive wire diameter must span at least three cells. This grid requires radius ≥ {formatSci(minimumRadius, 4)} m. Increase the authored radius or resolution; geometry is never automatically enlarged.</div>}
       <div className="note">The passive material responds to the evolving fields. The previous impressed-current value remains saved but is not a passive initial current or a voltage feed. General circuit and energy/momentum validation remains incomplete.</div>
     </> : <Field label="Current"><NumberInput value={obj.current} step={0.5} unit="A" onChange={current => patch({ current })} /></Field>}
+    {terminal && contacts && <>
+      <Field label="From body" hint="Positive current withdraws charge at the first wire point.">
+        <Select value={contacts.from} options={[{ value: '', label: 'Choose a conducting body' }, ...bodies.map(body => ({ value: body.id, label: body.name }))]}
+          onChange={from => patch({ terminalFeed: { ...contacts, from } })} />
+      </Field>
+      <Field label="To body" hint="Positive current deposits charge at the last wire point.">
+        <Select value={contacts.to} options={[{ value: '', label: 'Choose a conducting body' }, ...bodies.map(body => ({ value: body.id, label: body.name }))]}
+          onChange={to => patch({ terminalFeed: { ...contacts, to } })} />
+      </Field>
+      <Field label="Rise time" hint="Seconds from t = 0 to full current, using a cubic smooth start. Zero selects an immediate start.">
+        <NumberInput value={contacts.riseTime} min={0} step={1e-10} unit="s" onChange={riseTime => patch({ terminalFeed: { ...contacts, riseTime } })} />
+      </Field>
+      {!fullMaxwell && <div className="note warn" role="alert">Terminal current feed requires Maxwell mode. Disable Use approximation in Solve or choose impressed current.</div>}
+      <div className="note">Ideal externally powered current filament with explicit contacts to two stationary conducting bodies. Author an open stationary route including the return lead. It transfers charge without a voltage clamp or a resolved lead material response. Inactive current, conductivity and terminal settings remain saved when switching models.</div>
+    </>}
   </>;
 }
 
 function objectHelp(obj: SceneObject, fullMaxwell: boolean): string {
   if (fullMaxwell) {
+    if (isWire(obj) && obj.electricalModel === 'currentFeed') return 'Externally powered terminal current filament. Positive current transfers charge from the first endpoint body to the last along the visible feed and return route. Stationary resolved contacts are required; voltage clamping and lead material response are not included.';
     if (isConductor(obj)) return 'Finite conductivity with transported free charge and a local rest-frame material response. Choose the explicit isolated initial-charge model in Solve.';
     if (isParticle(obj)) return 'A source particle deposits charge and current into evolved Maxwell fields. A finite numerical charge shape is not a continuum point-particle self-force model.';
     if (isMagnet(obj)) return 'Impressed magnetization source. Moving or force-driven magnet models require explicit solver support.';
@@ -657,7 +683,7 @@ function SimulationPanel() {
           <div className="note">Physical time is not animation wall time. Estimated Δt: {formatSci(dt, 4)} s; one physical second requires about {formatSci(1 / dt, 3)} field steps. A slow mechanical cycle can be extremely expensive. Steps per frame changes pacing, never c or the authored motion frequency.</div>
           {hasConductors && <>
             <CheckRow label="Initialize plate voltages, then isolate" checked={sim.maxwellConductorModel === 'isolated'} onChange={isolated => setSimulation({ maxwellConductorModel: isolated ? 'isolated' : undefined })} />
-            <div className={`note ${sim.maxwellConductorModel ? '' : 'warn'}`}>Authored potentials initialize conductor charge once. The bodies then evolve as isolated finite-conductivity objects: no battery, voltage clamp or hidden supply wires. Select this model explicitly to run conductors; driven terminal and return-path models require separate support.</div>
+            <div className={`note ${sim.maxwellConductorModel ? '' : 'warn'}`}>Authored potentials initialize conductor charge once. The bodies then evolve with finite conductivity and no voltage clamp. Select this model explicitly to run conductors. An explicit terminal current feed can transfer charge between stationary bodies along its visible feed and return route.</div>
           </>}
           {measurements.extra && <>
             <div className="stat-line"><span>Physical steps</span><b>{measurements.extra.steps?.toLocaleString() ?? '—'}</b></div>
@@ -857,6 +883,11 @@ function MeasurePanel() {
           ['totalEnergy', 'Field and carrier energy estimate (J)'], ['ohmicLoss', 'Stationary material loss (J)'],
           ['sourceWork', 'Applied-current work (J)'], ['conductorLoss', 'Body heat estimate (J)'],
           ['mechanicalWork', 'Rigid linear work, partial (J)'],
+          ...(scene.objects.some(o => o.visible && o.kind === 'wire' && o.electricalModel === 'currentFeed') ? [
+            ['feedSourceWork', 'External terminal-source work (J)'], ['feedTransferredCharge', 'Terminal transferred charge (C)'],
+            ...scene.objects.filter(o => o.visible && (o.kind === 'conductor' || ((o.kind === 'wire' || o.kind === 'loop' || o.kind === 'coil') && o.electricalModel === 'conducting')))
+              .map(o => [`bodyCharge:${o.id}`, `${o.name} charge (C)`]),
+          ] : []),
           ...(scene.objects.some(o => o.visible && o.kind === 'dielectric' && o.materialModel === 'drude') ? [['drudeKineticEnergy', 'Carrier kinetic estimate (J)'], ['drudeLoss', 'Drude damping estimate (J)']] : []),
         ].map(([key, label]) => <div className="stat-line" key={key}><span>{label}</span><b>{measurements.extra?.[key] !== undefined ? formatSci(measurements.extra[key], 4) : '—'}</b></div>)}
         <div className="note">Relative Gauss residual uses the current charge and D/Δx scales. Applied-current work includes deposited conduction and bound currents as well as impressed sources. Stationary material loss, body heat and partial rigid linear work are separate diagnostics; they are not a closed energy/momentum ledger. Check resolution, domain, boundaries and initialization.</div>

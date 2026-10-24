@@ -89,7 +89,9 @@ export interface DielectricObject extends SceneObjectBase {
 
 export interface WireObject extends SceneObjectBase {
   kind: 'wire';
-  electricalModel?: 'impressed' | 'conducting';
+  electricalModel?: 'impressed' | 'conducting' | 'currentFeed';
+  /** Positive current transfers charge from the first endpoint/body to the last. */
+  terminalFeed?: { from: string; to: string; riseTime: number }; // riseTime in seconds
   conductivity?: number; // S/m for passive Maxwell material; default 0.01
   points: Vec3[]; // local coordinates
   current: number; // A

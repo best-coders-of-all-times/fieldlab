@@ -18,10 +18,21 @@ import { advanceParticle, momentumFromVelocity, validateSubluminalVelocity } fro
 import { buildMagnetizationSources, magnetizationCurrent, polarizationCharge, type MagnetVectorField } from './magnetization';
 import { advanceRigidBody } from './rigid';
 import { makeFilamentGeometry, type FilamentGeometry } from './conductingFilament';
+import { wirePath } from '../../scene/wirePath';
+import { compileFeedWeights, integrateFeedCharge, resolveFeedContact } from './terminalFeed';
+import type { TrajectoryWeight } from './deposition';
 
 // Particle momentum is staggered at time-dt/2, as in the PIC leapfrog.
 interface BodyState { position: Vec3; rotation: Vec3; velocity: Vec3; angularVelocity: Vec3; momentum: Vec3; }
 interface ConductingLattice { local: Vec3[]; charge: Float64Array; initialCharge: Float64Array; edges: { from: number; to: number; conductance: number }[]; }
+interface TerminalSource {
+  wire: WireObject;
+  from: string; to: string;
+  fromContact: ReturnType<typeof resolveFeedContact>; toContact: ReturnType<typeof resolveFeedContact>;
+  weights: TrajectoryWeight[];
+  contactNodes: Set<number>;
+  transferredCharge: number; sourceWork: number;
+}
 interface ChargeElement { object: SceneObject; local: Vec3; charge: number; }
 const OFF: Vec3[] = [[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]];
 type ConductingBody = ConductorObject | WireObject | LoopObject | CoilObject;
@@ -61,6 +72,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   private conductingEdges?: Int32Array;
   private dampingRows?: Float64Array;
   private materialOhmLimit?: number;
+  private feeds: TerminalSource[] = [];
   private motionKinematics = new Map<string, { time: number; center: Vec3; linear: Vec3; omega: Vec3 }>();
 
   constructor(scene: Scene) {
@@ -116,6 +128,8 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     }
     this.initializeElectrodes();
     this.initializeConductingLattices();
+    this.compileFeeds();
+    this.assertFeedSeparation(0);
     this.buildImpressedCurrents();
     this.initializeMagnetic();
     core.captureStaticBackground();
@@ -350,13 +364,97 @@ export class MaxwellSceneSolver extends MaxwellSampler {
   }
 
   private buildImpressedCurrents() {
-    const objects = this.scene.objects.filter(o => o.visible && ['wire', 'loop', 'coil'].includes(o.kind) && !isConductingBody(o));
+    const objects = this.scene.objects.filter(o => o.visible && ['wire', 'loop', 'coil'].includes(o.kind) && !(o.kind === 'wire' && o.electricalModel === 'currentFeed') && !isConductingBody(o));
     for (const object of objects) if (object.motion && object.dynamics?.mode !== 'fixed' || object.dynamics?.mode === 'forceDriven') throw new Error(`${object.name}: moving impressed filaments require a transported charge/feed model. Use stationary current sources or the explicit approximation option.`);
     const segments = buildMagnetostaticSources(objects).segments;
     for (let a = 0; a < segments.count; a++) {
       const start = Array.from(segments.segs.slice(a * 6, a * 6 + 3)) as Vec3, end = Array.from(segments.segs.slice(a * 6 + 3, a * 6 + 6)) as Vec3;
       depositTrajectory(this.impressed[0], this.impressed[1], this.impressed[2], this.core, this.gridPoint(start), this.gridPoint(end), segments.currents[a] * this.core.dt, this.core.dt);
     }
+  }
+
+  private compileFeeds() {
+    const s = this.core, spacing = Math.min(s.dx, s.dy, s.dz);
+    const stationary = (o: SceneObject) => o.dynamics?.mode !== 'forceDriven' && (!o.motion || o.dynamics?.mode === 'fixed');
+    const sources = this.scene.objects.filter((o): o is WireObject => o.visible && o.kind === 'wire' && o.electricalModel === 'currentFeed');
+    if (sources.length > 16) throw new Error('At most 16 terminal current feeds are supported in one CPU scene.');
+    let weightCount = 0;
+    for (const wire of sources) {
+      if (!stationary(wire)) throw new Error(`${wire.name}: current-feed paths and terminals must be stationary; moving feeds are not implemented.`);
+      if (wire.closed) throw new Error(`${wire.name}: a terminal feed requires an open path from the first contact to the last.`);
+      const terminals = wire.terminalFeed;
+      if (!terminals || !terminals.from || !terminals.to || terminals.from === terminals.to) throw new Error(`${wire.name}: choose two distinct conducting terminal bodies.`);
+      integrateFeedCharge(wire.current, terminals.riseTime, 0, s.dt);
+      const findBody = (id: string) => {
+        const body = this.scene.objects.find(o => o.id === id && o.visible && isConductingBody(o));
+        if (!body) throw new Error(`${wire.name}: terminal body is missing, hidden or not a finite-conductivity material.`);
+        if (!stationary(body)) throw new Error(`${wire.name}: terminal bodies must be stationary; moving feeds are not implemented.`);
+        return body;
+      };
+      const from = findBody(terminals.from), to = findBody(terminals.to);
+      if (wire.points.length < 2 || wire.points.length > 256 || wire.points.some(p => !p.every(Number.isFinite))) throw new Error(`${wire.name}: feed path requires 2 to 256 finite control points.`);
+      const path = wirePath(wire).map(p => localToWorld(wire, p));
+      let crossings = 0;
+      for (let n = 0; n < path.length; n++) {
+        if (path[n].some((v, a) => !Number.isFinite(v) || Math.abs(v - this.scene.domain.center[a]) > this.scene.domain.size[a] / 2)) throw new Error(`${wire.name}: feed path leaves the physical domain. Enlarge the domain or edit the path.`);
+        if (n) crossings += Math.ceil(Math.hypot(...path[n].map((v, a) => v - path[n - 1][a])) / spacing);
+      }
+      if (crossings > 2048) throw new Error(`${wire.name}: feed path exceeds the CPU segment budget. Simplify the path or use a coarser grid.`);
+      const nodes = (body: SceneObject) => this.lattices.get(body.id)!.local.map(p => this.gridPoint(localToWorld(this.pose(body, 0), p)));
+      const fromNodes = nodes(from), toNodes = nodes(to), gridPath = path.map(p => this.gridPoint(p));
+      let fromContact: ReturnType<typeof resolveFeedContact>, toContact: ReturnType<typeof resolveFeedContact>;
+      try {
+        fromContact = resolveFeedContact(s, gridPath[0], fromNodes);
+        toContact = resolveFeedContact(s, gridPath.at(-1)!, toNodes);
+      } catch (error) { throw new Error(`${wire.name}: terminal contact is unresolved. Place each endpoint inside its named body with complete CIC support, or refine the grid. ${error instanceof Error ? error.message : error}`); }
+      const weights = compileFeedWeights(s, gridPath, fromNodes, fromContact, toNodes, toContact);
+      weightCount += weights.length;
+      if (weightCount > 250_000) throw new Error('Terminal feed weights exceed the CPU memory budget. Simplify paths or reduce the number of feeds.');
+      const stride = [1, s.nx, s.nx * s.ny], contactNodes = new Set<number>();
+      for (const w of weights) if (w.length !== 0) { contactNodes.add(w.index); contactNodes.add(w.index + stride[w.axis]); }
+      this.feeds.push({ wire, from: from.id, to: to.id, fromContact, toContact, weights, contactNodes, transferredCharge: 0, sourceWork: 0 });
+    }
+  }
+
+  private assertFeedSeparation(time: number) {
+    if (!this.feeds.length) return;
+    const s = this.core, spacing = [s.dx, s.dy, s.dz];
+    // Contacts are resolved numerically: the feed's current edges and a body's
+    // CIC charge support must not touch except at named terminals. Point samples
+    // along a curve can miss a thin but grid-resolved third body entirely.
+    for (const object of this.scene.objects) {
+      const lattice = this.lattices.get(object.id); if (!lattice) continue;
+      const feeds = this.feeds.filter(f => f.from !== object.id && f.to !== object.id);
+      if (!feeds.length) continue;
+      const pose = this.pose(object, time);
+      for (const local of lattice.local) {
+        const point = this.gridPoint(localToWorld(pose, local)).map((v, a) => v / spacing[a]);
+        const base = point.map(Math.floor), fraction = point.map((v, a) => v - base[a]);
+        for (let k = 0; k < 2; k++) for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
+          const weight = (i ? fraction[0] : 1 - fraction[0]) * (j ? fraction[1] : 1 - fraction[1]) * (k ? fraction[2] : 1 - fraction[2]);
+          if (weight === 0) continue;
+          const c = base[0] + i + s.nx * (base[1] + j + s.ny * (base[2] + k));
+          if (feeds.some(feed => feed.contactNodes.has(c))) throw new Error(`${object.name}: another conducting body contacts a terminal feed's grid support. Separate it from the feed path or refine the grid; only the named terminal contacts are supported.`);
+        }
+      }
+    }
+  }
+
+  private feedCurrents() {
+    const s = this.core, dv = s.dx * s.dy * s.dz, currents = [s.Jx, s.Jy, s.Jz], fields = [s.Ex, s.Ey, s.Ez];
+    return this.feeds.map(feed => {
+      const q = integrateFeedCharge(feed.wire.current, feed.wire.terminalFeed!.riseTime, this.time, s.dt);
+      const from = this.lattices.get(feed.from)!, to = this.lattices.get(feed.to)!;
+      for (const contact of feed.fromContact) from.charge[contact.node] -= q * contact.weight;
+      for (const contact of feed.toContact) to.charge[contact.node] += q * contact.weight;
+      let voltage = 0;
+      for (const w of feed.weights) {
+        currents[w.axis][w.index] += q / (s.dt * dv) * w.length;
+        voltage += fields[w.axis][w.index] * w.length;
+      }
+      feed.transferredCharge += q;
+      return { feed, q, voltage };
+    });
   }
 
   private magnetCurrents() {
@@ -550,9 +648,12 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       const before = this.charges.map(c => localToWorld(this.pose(c.object), c.local));
       const materialBefore = new Map<string, Vec3[]>();
       for (const o of this.scene.objects) { const lattice = this.lattices.get(o.id); if (lattice) { const pose = this.pose(o); materialBefore.set(o.id, lattice.local.map(p => localToWorld(pose, p))); } }
+      this.assertFeedSeparation(this.time);
       this.conductorCurrents();
+      const feedSteps = this.feedCurrents();
       this.advanceBodies();
       this.assertMatterInside(this.time + s.dt);
+      this.assertFeedSeparation(this.time + s.dt);
       this.transportConductors(materialBefore);
       this.charges.forEach((charge, c) => {
         const to = localToWorld(this.pose(charge.object, this.time + s.dt), charge.local);
@@ -563,6 +664,11 @@ export class MaxwellSceneSolver extends MaxwellSampler {
       this.magnetCurrents();
       this.waveCurrents();
       s.step();
+      const fields = [s.Ex, s.Ey, s.Ez];
+      for (const { feed, q, voltage } of feedSteps) {
+        const nextVoltage = feed.weights.reduce((sum, w) => sum + fields[w.axis][w.index] * w.length, 0);
+        feed.sourceWork -= q * (voltage + nextVoltage) / 2;
+      }
     }
     this.elapsedMs += performance.now() - started;
   }
@@ -571,6 +677,7 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     this.bodyCharge = structuredClone(this.initialBodyCharge);
     for (const lattice of this.lattices.values()) lattice.charge.set(lattice.initialCharge);
     this.motionKinematics.clear();
+    for (const feed of this.feeds) { feed.transferredCharge = 0; feed.sourceWork = 0; }
     if (this.hasMagnets) {
       const sources = buildMagnetizationSources(this.scene, this.core, this.min, 0);
       this.polarization = sources.polarization; this.magnetization = sources.magnetization;
@@ -588,7 +695,9 @@ export class MaxwellSceneSolver extends MaxwellSampler {
     // Initially uncharged wave scenes need a field-based normalization; a
     // near-zero initial rho alone amplifies roundoff into a false alarm.
     const gaussScale = Math.max(this.chargeScale, Math.sqrt(scale2 / Math.max(count, 1)));
-    return { ...d, gaussRelative: d.divergenceE / gaussScale, gaussScale, preparationResidual: this.preparationResidual, openBoundaryResidual: this.openBoundaryResidual, openBoundaryIterations: this.openBoundaryIterations,
+    const terminalData: Record<string, number> = {};
+    for (const [id, lattice] of this.lattices) terminalData[`bodyCharge:${id}`] = lattice.charge.reduce((sum, q) => sum + q, 0);
+    return { ...d, ...terminalData, feedSourceWork: this.feeds.reduce((sum, feed) => sum + feed.sourceWork, 0), feedTransferredCharge: this.feeds.reduce((sum, feed) => sum + feed.transferredCharge, 0), gaussRelative: d.divergenceE / gaussScale, gaussScale, preparationResidual: this.preparationResidual, openBoundaryResidual: this.openBoundaryResidual, openBoundaryIterations: this.openBoundaryIterations,
       mechanicalWork: this.mechanicalWork, conductorLoss: this.conductorLoss, estimatedBytes: this.core.rho.length * (1100 + (this.core.drude ? 144 : 0) + 16 * this.bodyCharge.size),
       stepsPerSecond: this.elapsedMs > 0 ? 1000 * this.steps / this.elapsedMs : 0 };
   }

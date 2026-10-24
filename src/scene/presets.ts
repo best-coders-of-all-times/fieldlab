@@ -982,6 +982,36 @@ export const PRESETS: Preset[] = [
     },
   },
   {
+    id: 'maxwell-charging-capacitor',
+    title: 'Maxwell: charging capacitor',
+    group: 'Maxwell FDTD',
+    subtitle: 'Experimental · explicit current feed and return lead',
+    description: 'A stationary externally powered current filament transfers charge between initially neutral floating plates. The visible route includes the return lead; current rises smoothly over 1 ns.',
+    tags: ['experimental', 'terminal current', 'physical time'],
+    create: () => {
+      const s = maxwellDemoScene('Maxwell: charging capacitor', 'Experimental stationary capacitor charged by an explicit 0.01 A terminal current source with a 1 ns smooth start.');
+      s.simulation.maxwellConductorModel = 'isolated';
+      const from = makeConductor([-0.1875, 0, 0], 'box', [0.125, 0.45, 0.5]);
+      const to = makeConductor([0.1875, 0, 0], 'box', [0.125, 0.45, 0.5]);
+      from.name = 'From plate (charge withdrawn)';
+      to.name = 'To plate (charge deposited)';
+      for (const plate of [from, to]) {
+        plate.floating = true; plate.netCharge = 0; plate.potential = 0; plate.conductivity = 0.01;
+      }
+      const feed = makeWire([[-0.1875, 0, 0], [-0.1875, -0.375, 0], [0.1875, -0.375, 0], [0.1875, 0, 0]], 0.01);
+      Object.assign(feed, { name: 'Terminal current feed', electricalModel: 'currentFeed', closed: false, path: 'polyline',
+        terminalFeed: { from: from.id, to: to.id, riseTime: 1e-9 } });
+      const probe = makeProbe([0, 0.0625, 0]); probe.quantity = 'B';
+      s.objects = [from, to, feed, probe];
+      s.theory = {
+        title: 'Charging through explicit terminals',
+        body: 'The ideal externally powered current filament withdraws positive charge from the first plate and deposits it in the second. Its visible authored route includes the feed and return lead; displacement current closes the capacitor circuit. Both endpoints contact resolved plate material. The source and plates remain stationary, with no voltage clamp or lead material response. Current starts at zero and rises with a cubic smooth-start waveform over 1 ns. The initially neutral finite-conductivity plates and Maxwell E/B evolve on physical field time. External-source work is measured separately; the general mechanical ledger remains incomplete. This 16-cell demonstration requires grid, domain and startup convergence before quantitative interpretation.',
+        prompts: ['Pause and single-step to compare transferred charge, plate charge and evolved B.', 'Reverse the signed current to reverse charge transfer along the same route.', 'Rewind and replay preserve authored current, contacts and rise time.'],
+      };
+      return s;
+    },
+  },
+  {
     id: 'maxwell-moving-capacitor',
     title: 'Maxwell: moving isolated capacitor',
     group: 'Maxwell FDTD',

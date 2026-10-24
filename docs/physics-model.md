@@ -45,12 +45,16 @@ Initialization prepares electrostatic E/charge with finite-domain boundary/elect
 | --- | --- | --- |
 | Point charge / source particle | Grid-scale cloud-in-cell charge and conserved trajectory current; prescribed or field-driven motion | Finite shape, not continuum point self-force or separate radiation reaction. Closed deposition-domain exits are rejected. |
 | Sphere/shell | Distributed charge samples: four radial shells for a solid, 48 angular samples per shell | Quadrature and grid require refinement; no analytic sphere formula during Maxwell evolution. |
-| Wire/loop/coil | Stationary impressed current, or explicitly selected resolved passive conducting material | Passive wires share the finite-conductivity body model. Diameter must span three cells; no automatic enlargement or separate-body electrical contact. Impressed filaments cannot move. |
+| Wire/loop/coil | Stationary impressed current, explicitly selected resolved passive material, or a wire terminal current feed | Passive wires share the finite-conductivity body model. Diameter must span three cells; no automatic enlargement or separate-body electrical contact. Impressed filaments cannot move. |
 | Electric point source / antenna | Current deposition; amplitude in amperes | Magnetic point-current components and moving driven sources are rejected; no general calibrated port. |
 | Plane-wave gadget | Fixed x-normal current sheet; amplitude specifies an E scale; radiates both ways | Authored +x sheet orientation only, not a one-way TFSF source. |
 | Stationary dielectric | Staircased background epsilon_r, mu_r and conductivity; optional Drude carrier response | One local Drude pole with specified SI parameters; no hysteresis or general moving constitutive response. |
 | Conductor | Initialized isolated charge, finite conductivity and transported body-owned charge | Not a moving PEC, voltage supply or validated arbitrary moving interface. |
 | Permanent magnet | Prescribed laboratory-shape impressed polarization/magnetization, including motion | No force-driven magnet, rest-shape contraction, hysteresis or internal magnetic relaxation. |
+
+### Explicit terminal current feeds
+
+A wire can select Terminal current feed, two distinct stationary conducting bodies and a smooth-start rise time in seconds. Its visible open path contains the feed and return lead; positive current withdraws charge at its first endpoint and deposits it at its last. Contacts require full resolved interpolation support inside the named body. This is an externally powered ideal current source with evolved Maxwell fields, not a voltage clamp or passive lead. Moving terminals/feeds and intersecting unrelated body/current supports are rejected. The signed transferred charge, each body's owned free charge and external-source work are displayed and restored on rewind. Inactive settings stay saved. Approximation mode rejects terminal feeds explicitly. See `maxwell-terminal-validation.md` for conservation, circulation, work and replay evidence.
 
 ### Stationary Drude material
 

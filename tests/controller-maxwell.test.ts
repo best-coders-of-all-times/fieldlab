@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { makeCharge, makeScene, makeLoop, makeDielectric } from '../src/scene/defaults';
+import { makeCharge, makeScene, makeLoop, makeDielectric, makeWire } from '../src/scene/defaults';
 import { useAppStore } from '../src/app/store';
 import { SimulationController } from '../src/app/controller';
 
@@ -51,5 +51,16 @@ it('rejects Drude material in approximation mode rather than silently using epsi
   const controller = new SimulationController(); controller.update(scene, false);
   expect(useAppStore.getState().status.phase).toBe('error');
   expect(useAppStore.getState().status.message).toMatch(/Drude|dispers/i);
+  expect(workers).toHaveLength(0); controller.dispose();
+});
+
+it('requires Maxwell mode for a saved terminal current feed', () => {
+  const wire = Object.assign(makeWire(), { electricalModel: 'currentFeed' as never, terminalFeed: { from: 'a', to: 'b', riseTime: 1e-9 } });
+  const scene = makeScene({ name: 'fed', objects: [wire] });
+  const workers: unknown[] = [];
+  vi.stubGlobal('Worker', class { constructor() { workers.push(this); } postMessage() {} terminate() {} });
+  const controller = new SimulationController(); controller.update(scene, false);
+  expect(useAppStore.getState().status.phase).toBe('error');
+  expect(useAppStore.getState().status.message).toMatch(/terminal|feed/i);
   expect(workers).toHaveLength(0); controller.dispose();
 });
