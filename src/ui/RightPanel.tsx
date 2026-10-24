@@ -615,6 +615,7 @@ function SimulationPanel() {
         {!fullMaxwell && scene.mode === 'waves' && <div className="note">The existing wave FDTD model remains selected. Full Maxwell scene coupling and its capability checks require switching approximation off.</div>}
         {fullMaxwell && <>
           <div className="note">Evolves Maxwell E and B for supported source and material models. Selecting the full equations does not implement every moving-material or circuit model. Unsupported configurations stop with an explicit error.</div>
+          <div className="note">The finite grid uses staircased geometry and explicit constitutive and source models. Permanent magnets use impressed magnetization in the authored laboratory shape, including motion; hysteresis and rest-shape Lorentz contraction are not modeled. Electrodes have finite conductivity and isolated initial charge; voltage feeds are not implemented. Check spatial and time convergence for each configuration.</div>
           <div className="note">Physical time is not animation wall time. Estimated Δt: {formatSci(dt, 4)} s; one physical second requires about {formatSci(1 / dt, 3)} field steps. A slow mechanical cycle can be extremely expensive. Steps per frame changes pacing, never c or the authored motion frequency.</div>
           {hasConductors && <>
             <CheckRow label="Initialize plate voltages, then isolate" checked={sim.maxwellConductorModel === 'isolated'} onChange={isolated => setSimulation({ maxwellConductorModel: isolated ? 'isolated' : undefined })} />

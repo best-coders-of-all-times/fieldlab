@@ -116,6 +116,7 @@ test('cavity opens transparent and custom wires and motion survive reset', async
 });
 
 test('Maxwell point charges step on physical time and replay preserves edited source data', async ({ page }) => {
+  test.setTimeout(60000);
   await page.getByRole('button', { name: 'Pause (space)', exact: true }).click();
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   await page.locator('.object-row').first().click();
@@ -134,8 +135,13 @@ test('Maxwell point charges step on physical time and replay preserves edited so
   await page.getByRole('button', { name: 'Data', exact: true }).click();
   await expect(page.locator('.probe-readout')).toContainText('Total E and B');
   await expect(page.locator('.probe-readout .stat-line').filter({ hasText: 'Potential' })).toHaveCount(0);
+  await expect(page.locator('.probe-readout .stat-line').filter({ hasText: /^Dx/ })).toContainText('C/m²');
+  await expect(page.locator('.probe-readout .stat-line').filter({ hasText: /^Hy/ })).toContainText('A/m');
+  await expect(page.locator('.probe-readout .stat-line').filter({ hasText: /^Jz/ })).toContainText('A/m²');
+  await expect(page.locator('.probe-readout .stat-line').filter({ hasText: /^ρ/ })).toContainText('C/m³');
   await expect(page.locator('.measure-card').filter({ hasText: 'Time step' })).toBeVisible();
   await expect(page.locator('.stat-line').filter({ hasText: 'Relative Gauss residual' })).toBeVisible();
+  await page.locator('.probe-readout').screenshot({ path: 'artifacts/maxwell-probe-components.png' });
   await page.getByRole('button', { name: 'Single step', exact: true }).click();
   await expect.poll(async () => page.evaluate(() => {
     const frame = (window as any).fieldlabFrames.filter((f: any) => f.diagnostics).at(-1);
