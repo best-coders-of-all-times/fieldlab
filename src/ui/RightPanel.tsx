@@ -355,13 +355,13 @@ function ObjectPhysics({
         <Field label="Mass">
           <NumberInput value={obj.mass} step={1e-31} unit="kg" onChange={(v) => patch({ mass: Math.max(1e-31, v), species: 'custom' })} />
         </Field>
-        <Field label="Initial velocity">
+        {!fullMaxwell && <Field label="Initial velocity">
           <Vec3Input value={obj.velocity} step={1e5} unit="m/s" onChange={(v) => patch({ velocity: v })} />
-        </Field>
+        </Field>}
         <Field label="Trail points">
           <Slider value={obj.trailLength} min={100} max={3000} step={50} format={(v) => `${Math.round(v)}`} onChange={(v) => patch({ trailLength: Math.round(v) })} />
         </Field>
-        <div className="note">{fullMaxwell ? 'Source particle coupled to the evolved field clock and deposited charge/current. Dynamics overrides above take precedence over these legacy initial mass/velocity fields.' : 'Test particle with Boris pusher. Fields come from the statics engine or the external E/B settings.'}</div>
+        <div className="note">{fullMaxwell ? 'Source particle coupled to the evolved field clock and deposited charge/current. Set initial velocity in Dynamics above; explicit Dynamics mass overrides the species mass.' : 'Test particle with Boris pusher. Fields come from the statics engine or the external E/B settings.'}</div>
       </PanelSection>
     );
   }

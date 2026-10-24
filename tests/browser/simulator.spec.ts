@@ -249,3 +249,20 @@ test('passive loop selection preserves authored current and requires an explicit
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'requires Maxwell' })).toBeVisible();
 });
+
+test('Maxwell particles expose a single initial velocity control in Dynamics', async ({ page }) => {
+  await page.getByRole('button', { name: /New custom scene/ }).click();
+  await page.getByRole('button', { name: 'Particle Lorentz motion', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Initial velocity', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Initial velocity', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Initial linear velocity', exact: true }).getByRole('spinbutton').first()).toHaveValue('1000000');
+  await page.getByRole('group', { name: 'Dynamics', exact: true }).getByRole('combobox').selectOption('prescribed');
+  await expect(page.getByText('With Stationary selected, prescribed motion holds the initial pose fixed.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Solve', exact: true }).click();
+  await page.locator('.check-row').filter({ hasText: 'Use approximation' }).getByRole('switch').click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Initial velocity', exact: true }).getByRole('spinbutton').first()).toHaveValue('1000000');
+});

@@ -64,6 +64,7 @@ export function MotionEditor({ obj, patch }: { obj: SceneObject; patch: (p: Part
         { value: 'spin', label: 'Spin about world axis' }, { value: 'keyframes', label: 'Custom timed keyframes' },
       ]} />
     </Field>
+    {!approximate && obj.kind === 'particle' && !spec && <div className="note">With Stationary selected, prescribed motion holds the initial pose fixed. Choose force driven motion to evolve from an initial velocity.</div>}
     {spec && spec.kind !== 'keyframes' && <>
       <Field label="World axis"><Vec3Input value={spec.axis} step={0.1} onChange={axis => patch({ motion: { ...spec, axis } })} /></Field>
       {spec.kind === 'oscillate' && <Field label="Amplitude"><NumberInput value={spec.amplitude} min={0} unit="m" onChange={amplitude => patch({ motion: { ...spec, amplitude } })} /></Field>}
