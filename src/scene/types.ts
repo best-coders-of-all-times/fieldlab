@@ -218,6 +218,27 @@ export interface Domain {
 
 export type BoundaryKind = 'pml' | 'pec' | 'periodic';
 
+export type PlaybackSampleMode = 'count' | 'interval';
+export type PlaybackFps = 12 | 24 | 30 | 60;
+
+/** Authored precompute window and cached-playback presentation settings.
+ * The frame cache itself is session runtime state and is never serialized.
+ */
+export interface PlaybackSettings {
+  /** Physical time at the start of the cached window, seconds. */
+  startTime: number;
+  /** Physical time at the end of the cached window, seconds. */
+  endTime: number;
+  sampleMode: PlaybackSampleMode;
+  /** Requested frame count for count mode, 2..1200. */
+  sampleCount: number;
+  /** Requested physical interval between samples, seconds, for interval mode. */
+  sampleInterval: number;
+  /** Cached display frames per wall-clock second. */
+  fps: PlaybackFps;
+  loop: boolean;
+}
+
 export interface SimulationSettings {
   /** Retain the electrostatic/quasistatic model; false selects Maxwell FDTD. */
   useApproximation: boolean;
@@ -238,6 +259,8 @@ export interface SimulationSettings {
   targetTime?: number;
   /** Multiplier for particle / quasistatic animation speed. */
   timeScale: number;
+  /** Optional so older presets and saved scenes continue to load. */
+  playback?: PlaybackSettings;
 }
 
 export type SliceQuantity =

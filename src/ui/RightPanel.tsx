@@ -37,10 +37,12 @@ import {
 import { formatPrefixed, formatSci } from '../engine/units';
 import { M_ELECTRON, M_PROTON, E_CHARGE, C_LIGHT } from '../engine/constants';
 import { maxwellRunBudget } from '../engine/maxwell/runBudget';
+import { PlaybackPanel } from './PlaybackPanel';
 
 export function RightPanel() {
   const rightTab = useAppStore((s) => s.rightTab);
   const setRightTab = useAppStore((s) => s.setRightTab);
+  const playbackMode = useAppStore((s) => s.playback.mode);
   const tabs: Array<{ id: typeof rightTab; label: string; icon: string }> = [
     { id: 'inspector', label: 'Edit', icon: 'cursor' },
     { id: 'display', label: 'View', icon: 'eye' },
@@ -58,8 +60,21 @@ export function RightPanel() {
         ))}
       </div>
       <div className="right-body">
-        {rightTab === 'inspector' && <Inspector />}
-        {rightTab === 'display' && <DisplayPanel />}
+        {playbackMode !== 'idle' && (
+          <div className={`playback-banner ${playbackMode}`}>
+            <Icon name="pause" size={13} />
+            <span>
+              <b>{playbackMode === 'cached' ? 'Cached playback' : 'Precomputing'}</b>
+              {' — return to live to edit objects, display or physics.'}
+            </span>
+          </div>
+        )}
+        {rightTab === 'inspector' && (
+          <fieldset className="lock-fieldset" disabled={playbackMode !== 'idle'}><Inspector /></fieldset>
+        )}
+        {rightTab === 'display' && (
+          <fieldset className="lock-fieldset" disabled={playbackMode !== 'idle'}><DisplayPanel /></fieldset>
+        )}
         {rightTab === 'simulation' && <SimulationPanel />}
         {rightTab === 'theory' && <TheoryPanel />}
         {rightTab === 'measure' && <MeasurePanel />}
@@ -703,6 +718,8 @@ function SimulationPanel() {
   const meta = useAppStore((s) => s.fdtdMeta);
   const measurements = useAppStore(s => s.measurements);
   const status = useAppStore(s => s.status);
+  const playbackMode = useAppStore(s => s.playback.mode);
+  const locked = playbackMode !== 'idle';
   const dx = Math.max(...scene.domain.size) / sim.resolution;
   const estimatedDt = sim.cfl * dx / (C_LIGHT * Math.sqrt(3));
   const dt = meta?.dt ?? estimatedDt;
@@ -713,6 +730,8 @@ function SimulationPanel() {
   } catch { /* The worker reports invalid imported targets without breaking the inspector. */ }
   return (
     <>
+      {fullMaxwell && <PlaybackPanel />}
+      <fieldset className="lock-fieldset" disabled={locked}>
       <PanelSection title="Physical model">
         <CheckRow label="Use approximation" checked={!fullMaxwell} onChange={useApproximation => setSimulation({ useApproximation })} />
         {!fullMaxwell && scene.mode === 'fields' && <div className="note">
@@ -746,6 +765,8 @@ function SimulationPanel() {
         </>}
         {status.phase === 'error' && status.message && <div className="note warn" role="alert">{status.message}</div>}
       </PanelSection>
+      </fieldset>
+      <fieldset className="lock-fieldset" disabled={locked}>
       <PanelSection title="Grid & solver">
         <Field label="Resolution">
           <Segmented
@@ -811,7 +832,9 @@ function SimulationPanel() {
           </>
         )}
       </PanelSection>
+      </fieldset>
 
+      <fieldset className="lock-fieldset" disabled={locked}>
       <PanelSection title="Domain">
         <Field label="Size">
           <Vec3Input value={scene.domain.size} step={0.1} unit="m" onChange={(size) => useAppStore.getState().setScene({ ...scene, domain: { ...scene.domain, size } }, { history: false })} />
@@ -820,6 +843,7 @@ function SimulationPanel() {
           <Vec3Input value={scene.domain.center} step={0.05} unit="m" onChange={(center) => useAppStore.getState().setScene({ ...scene, domain: { ...scene.domain, center } }, { history: false })} />
         </Field>
       </PanelSection>
+      </fieldset>
     </>
   );
 }
@@ -875,6 +899,7 @@ function MeasurePanel() {
   const togglePanel = useAppStore((s) => s.togglePanel);
   const panels = useAppStore((s) => s.panels);
   const meta = useAppStore((s) => s.fdtdMeta);
+  const locked = useAppStore((s) => s.playback.mode !== 'idle');
   const fullMaxwell = scene.simulation.useApproximation === false;
   const waves = scene.mode === 'waves' || fullMaxwell;
 
@@ -997,7 +1022,7 @@ function MeasurePanel() {
       )}
 
       <PanelSection title={`Probes (${probes.length})`}>
-        <CoordinateProbe />
+        <fieldset className="lock-fieldset" disabled={locked}><CoordinateProbe /></fieldset>
         {probes.map(p => <div className="probe-row" key={p.id}>
           <div className="probe-row-head"><button className="mini-btn" onClick={() => useAppStore.getState().select(p.id)}>{scene.objects.find(o => o.id === p.id)?.name ?? 'Probe'}</button></div>
           <div className="note">({p.position.map(v => formatSci(v, 5)).join(', ')}) m</div>

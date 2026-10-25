@@ -47,6 +47,7 @@ export function LeftPanel() {
   const addObject = useAppStore((s) => s.addObject);
   const updateObject = useAppStore((s) => s.updateObject);
   const removeObject = useAppStore((s) => s.removeObject);
+  const locked = useAppStore((s) => s.playback.mode !== 'idle');
   const [query, setQuery] = useState('');
 
   const filtered = useMemo(() => {
@@ -103,7 +104,9 @@ export function LeftPanel() {
           <Icon name="add" size={13} /> Add
         </button>
       </div>
+      <fieldset className="lock-fieldset left-lock" disabled={locked}>
       <div className="left-body">
+        {locked && <div className="playback-banner compact"><span>Return to live to change scenes or objects.</span></div>}
         {leftTab === 'scenes' ? (
           <>
             <button className="preset-card custom-scene" onClick={() => {
@@ -213,6 +216,7 @@ export function LeftPanel() {
           </>
         )}
       </div>
+      </fieldset>
     </aside>
   );
 }

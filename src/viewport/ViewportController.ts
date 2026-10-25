@@ -51,6 +51,7 @@ export class ViewportController {
   private selectedId: string | null = null;
   private animation = 0;
   private disposed = false;
+  private editingEnabled = true;
   private frameCount = 0;
   private fpsAt = performance.now();
   private lastLegend: { quantity: SliceQuantity; min: number; max: number } | null = null;
@@ -93,6 +94,7 @@ export class ViewportController {
       this.controls.enabled = !(event as unknown as { value: boolean }).value;
     });
     this.transform.addEventListener('objectChange', () => {
+      if (!this.editingEnabled) return;
       const obj = this.sceneData?.objects.find((o) => o.id === this.selectedId);
       if (!obj) return;
       const group = this.views.get(obj.id)?.group;
@@ -179,6 +181,16 @@ export class ViewportController {
 
   setTransformMode(mode: 'translate' | 'rotate' | 'scale'): void {
     this.transform.setMode(mode);
+  }
+
+  /** Keep orbit, zoom and pan active while preventing object transforms. */
+  setEditingEnabled(enabled: boolean): void {
+    if (this.editingEnabled === enabled) return;
+    this.editingEnabled = enabled;
+    this.transform.enabled = enabled;
+    this.transformHelper.visible = enabled;
+    if (!enabled) this.transform.detach();
+    else this.updateSelection();
   }
 
   requestCamera(mode: 'iso' | 'front' | 'top' | 'side'): void {
@@ -334,7 +346,8 @@ export class ViewportController {
       this.transform.detach();
       return;
     }
-    if (this.transform.object !== view.group) this.transform.attach(view.group);
+    if (this.editingEnabled && this.transform.object !== view.group) this.transform.attach(view.group);
+    this.transformHelper.visible = this.editingEnabled;
     this.selectionBox.setFromObject(view.group);
     this.selectionBox.visible = true;
   }

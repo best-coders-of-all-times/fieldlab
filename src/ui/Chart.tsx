@@ -9,6 +9,8 @@ export function ChartDrawer() {
   const scene = useAppStore((s) => s.scene);
   const togglePanel = useAppStore((s) => s.togglePanel);
   const clearChart = useAppStore((s) => s.clearChart);
+  const playbackMode = useAppStore((s) => s.playback.mode);
+  const time = useAppStore((s) => s.time);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -109,12 +111,30 @@ export function ChartDrawer() {
         }
         ctx.stroke();
       });
+
+      if (playbackMode === 'cached' && time >= t0 && time <= t1) {
+        const x = xOf(time);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 209, 102, 0.9)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, padT + plotH);
+        ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = '#ffd166';
+        ctx.font = '9px "JetBrains Mono", ui-monospace, monospace';
+        ctx.textAlign = x > padL + plotW - 52 ? 'right' : 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText(formatTimeAxis(time), x + (ctx.textAlign === 'right' ? -4 : 4), padT + 2);
+      }
     };
     draw();
     const obs = new ResizeObserver(draw);
     obs.observe(wrap);
     return () => obs.disconnect();
-  }, [chart]);
+  }, [chart, playbackMode, time]);
 
   return (
     <div className="chart-drawer">

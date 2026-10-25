@@ -25,6 +25,7 @@ export default function App() {
   const error = useAppStore((s) => s.error);
   const stepRequest = useAppStore((s) => s.stepRequest);
   const resetRequest = useAppStore((s) => s.resetRequest);
+  const playbackCommand = useAppStore((s) => s.playbackCommand);
   const controllerRef = useRef<SimulationController | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -62,6 +63,10 @@ export default function App() {
   }, [resetRequest]);
 
   useEffect(() => {
+    if (playbackCommand) controllerRef.current?.handlePlaybackCommand(playbackCommand);
+  }, [playbackCommand]);
+
+  useEffect(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(saveCurrentScene, 700);
     return () => {
@@ -94,23 +99,24 @@ export default function App() {
         return;
       }
       const store = useAppStore.getState();
+      const locked = store.playback.mode !== 'idle';
       if (event.code === 'Space') {
         event.preventDefault();
-        store.setPlaying(!store.playing);
+        if (store.playback.mode !== 'computing') store.setPlaying(!store.playing);
       } else if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (store.selectedId) {
+        if (!locked && store.selectedId) {
           event.preventDefault();
           store.removeObject(store.selectedId);
         }
-      } else if (event.key.toLowerCase() === 'g') store.setGizmoMode('translate');
-      else if (event.key.toLowerCase() === 'r') store.setGizmoMode('rotate');
-      else if (event.key.toLowerCase() === 's') store.setGizmoMode('scale');
+      } else if (!locked && event.key.toLowerCase() === 'g') store.setGizmoMode('translate');
+      else if (!locked && event.key.toLowerCase() === 'r') store.setGizmoMode('rotate');
+      else if (!locked && event.key.toLowerCase() === 's') store.setGizmoMode('scale');
       else if (event.key === '1') store.requestCamera('iso');
       else if (event.key === '2') store.requestCamera('front');
       else if (event.key === '3') store.requestCamera('top');
       else if (event.key === '4') store.requestCamera('side');
       else if (event.key.toLowerCase() === 'f') store.requestCamera('iso');
-      else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+      else if (!locked && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         if (event.shiftKey) store.redo();
         else store.undo();

@@ -45,8 +45,12 @@ export function ViewportView() {
   const time = useAppStore((s) => s.time);
   const particleTelemetry = useAppStore((s) => s.particleTelemetry);
   const inductionTelemetry = useAppStore((s) => s.inductionTelemetry);
+  const playback = useAppStore((s) => s.playback);
   const setGizmoMode = useAppStore((s) => s.setGizmoMode);
   const requestCamera = useAppStore((s) => s.requestCamera);
+  const exitPlayback = useAppStore((s) => s.exitPlayback);
+  const locked = playback.mode !== 'idle';
+  const computing = playback.mode === 'computing';
   const [legend, setLegend] = useState<{ quantity: SliceQuantity; min: number; max: number } | null>(null);
 
   useEffect(() => {
@@ -81,6 +85,10 @@ export function ViewportView() {
   }, [gizmoMode]);
 
   useEffect(() => {
+    controllerRef.current?.setEditingEnabled(!locked);
+  }, [locked]);
+
+  useEffect(() => {
     if (cameraRequest > 0) controllerRef.current?.requestCamera(cameraMode);
   }, [cameraRequest, cameraMode]);
 
@@ -105,15 +113,28 @@ export function ViewportView() {
             <span className="vp-chip">v <b>{formatPrefixed(particleTelemetry[0].speed, 'm/s')}</b></span>
           )}
           {(scene.mode === 'waves' || fullMaxwell) && (
-            <span className={`vp-chip ${play ? '' : 'warn'}`}><span className="dot" />{play ? 'running' : 'paused'} · {formatSci(time, 3)} s</span>
+            <span className={`vp-chip ${playback.mode === 'idle' && !play ? 'warn' : ''}`}>
+              <span className="dot" />
+              {computing
+                ? `precomputing ${Math.round(playback.totalSteps > 0 ? 100 * playback.steps / playback.totalSteps : 0)}%`
+                : playback.mode === 'cached'
+                  ? `cached frame ${playback.frameIndex + 1}/${playback.frameCount}`
+                  : `${play ? 'running' : 'paused'} · ${formatSci(time, 3)} s`}
+            </span>
           )}
+          {playback.mode === 'cached' && <span className="vp-chip">t {formatSci(time, 4)} s</span>}
           <span className="vp-chip">{scene.objects.length} objects</span>
         </div>
 
         <div className="vp-top-right">
-          <button className={`icon-btn ${gizmoMode === 'translate' ? 'active' : ''}`} onClick={() => setGizmoMode('translate')} title="Move (G)"><Icon name="move" size={15} /></button>
-          <button className={`icon-btn ${gizmoMode === 'rotate' ? 'active' : ''}`} onClick={() => setGizmoMode('rotate')} title="Rotate (R)"><Icon name="rotate" size={15} /></button>
-          <button className={`icon-btn ${gizmoMode === 'scale' ? 'active' : ''}`} onClick={() => setGizmoMode('scale')} title="Scale (S)"><Icon name="scale" size={15} /></button>
+          {locked && (
+            <button className="vp-return" onClick={exitPlayback} title="Discard the cache and restart live fields">
+              {computing ? 'Cancel & return to live' : 'Return to live'}
+            </button>
+          )}
+          <button className={`icon-btn ${gizmoMode === 'translate' ? 'active' : ''}`} onClick={() => setGizmoMode('translate')} disabled={locked} title="Move (G)"><Icon name="move" size={15} /></button>
+          <button className={`icon-btn ${gizmoMode === 'rotate' ? 'active' : ''}`} onClick={() => setGizmoMode('rotate')} disabled={locked} title="Rotate (R)"><Icon name="rotate" size={15} /></button>
+          <button className={`icon-btn ${gizmoMode === 'scale' ? 'active' : ''}`} onClick={() => setGizmoMode('scale')} disabled={locked} title="Scale (S)"><Icon name="scale" size={15} /></button>
           <span style={{ width: 6 }} />
           <button className="icon-btn" onClick={() => requestCamera('iso')} title="Isometric camera (1)"><Icon name="orbit" size={15} /></button>
           <button className="icon-btn" onClick={() => requestCamera('front')} title="Front camera (2)"><Icon name="box" size={15} /></button>
@@ -137,7 +158,10 @@ export function ViewportView() {
         <div className="vp-hint">drag orbit · scroll zoom · click select · right-drag pan</div>
 
         {status.phase === 'solving' && (
-          <div className="vp-center-note"><span className="spinner" /> solving fields…</div>
+          <div className="vp-center-note">
+            <span className="spinner" />
+            {computing ? `precomputing cached frames · ${playback.framesDone}/${playback.totalFrames} · ${Math.round(playback.totalSteps > 0 ? 100 * playback.steps / playback.totalSteps : 0)}%` : 'solving fields…'}
+          </div>
         )}
         {status.phase === 'error' && error && <div className="vp-error">{error}</div>}
       </div>

@@ -5,13 +5,15 @@ import type { Vec3 } from '../engine/math/vec3';
 import type { StaticsSummary } from '../engine/staticsEngine';
 import type {
   MeasurementSnapshot,
+  PlaybackFps,
+  PlaybackSettings,
   ProbeReading,
   Scene,
   SceneObject,
   TimeSeriesPoint,
 } from '../scene/types';
 import { defaultScene, getPreset, PRESETS } from '../scene/presets';
-import { cloneObject, makePlaneWave, uid } from '../scene/defaults';
+import { cloneObject, defaultPlayback, makePlaneWave, uid } from '../scene/defaults';
 import { isAntenna, isPlaneWave, isPointSource } from '../scene/types';
 
 export type SolverPhase = 'idle' | 'solving' | 'ready' | 'error';
@@ -41,6 +43,62 @@ export interface ParticleTelemetry {
   gyroPeriod: number;
 }
 
+export type PlaybackMode = 'idle' | 'computing' | 'cached';
+
+/** Runtime-only cached-playback state. Frame arrays live in the controller. */
+export interface PlaybackRuntime {
+  mode: PlaybackMode;
+  requestId: number;
+  frameCount: number;
+  frameIndex: number;
+  framesDone: number;
+  totalFrames: number;
+  steps: number;
+  totalSteps: number;
+  bytes: number;
+  frameBytes: number;
+  startTime: number;
+  endTime: number;
+  sampleTimes: number[];
+  fps: PlaybackFps;
+  loop: boolean;
+  phase: 'warmup' | 'sampling';
+  startedAt: number;
+  elapsedMs: number;
+  stepsPerSecond: number;
+  message?: string;
+}
+
+export interface PlaybackCommand {
+  serial: number;
+  kind: 'precompute' | 'cancel' | 'seek' | 'exit';
+  index?: number;
+}
+
+export function idlePlaybackRuntime(settings: PlaybackSettings): PlaybackRuntime {
+  return {
+    mode: 'idle',
+    requestId: 0,
+    frameCount: 0,
+    frameIndex: 0,
+    framesDone: 0,
+    totalFrames: 0,
+    steps: 0,
+    totalSteps: 0,
+    bytes: 0,
+    frameBytes: 0,
+    startTime: settings.startTime,
+    endTime: settings.endTime,
+    sampleTimes: [],
+    fps: settings.fps,
+    loop: settings.loop,
+    phase: 'warmup',
+    startedAt: 0,
+    elapsedMs: 0,
+    stepsPerSecond: 0,
+  };
+}
+
 interface AppState {
   scene: Scene;
   presetId: string | null;
@@ -65,6 +123,8 @@ interface AppState {
   gizmoMode: 'translate' | 'rotate' | 'scale';
   stepRequest: number;
   resetRequest: number;
+  playback: PlaybackRuntime;
+  playbackCommand: PlaybackCommand | null;
   past: Scene[];
   future: Scene[];
   historyAt: number;
@@ -96,6 +156,13 @@ interface AppState {
   setError: (error: string | null) => void;
   setDisplay: (patch: Partial<Scene['display']>) => void;
   setSimulation: (patch: Partial<Scene['simulation']>) => void;
+  setPlayback: (patch: Partial<PlaybackRuntime>) => void;
+  updatePlaybackSettings: (patch: Partial<PlaybackSettings>) => void;
+  requestPrecompute: () => void;
+  cancelPlayback: () => void;
+  requestPlaybackSeek: (index: number) => void;
+  exitPlayback: () => void;
+  replaceChart: (points: TimeSeriesPoint[]) => void;
   togglePanel: (key: keyof AppState['panels']) => void;
   setRightTab: (tab: AppState['rightTab']) => void;
   setLeftTab: (tab: AppState['leftTab']) => void;
@@ -109,6 +176,7 @@ interface AppState {
 
 const cloneScene = (scene: Scene): Scene => structuredClone(scene);
 const initial = defaultScene();
+const initialPlayback = initial.simulation.playback ?? defaultPlayback();
 
 export const useAppStore = create<AppState>((set, get) => {
   const pushHistory = (scene: Scene, force = false) => {
@@ -121,6 +189,17 @@ export const useAppStore = create<AppState>((set, get) => {
       past: [...state.past.slice(-39), cloneScene(scene)],
       future: [],
       historyAt: now,
+    }));
+  };
+
+  const playbackLocked = () => get().playback.mode !== 'idle';
+  const issuePlaybackCommand = (kind: PlaybackCommand['kind'], index?: number) => {
+    set((state) => ({
+      playbackCommand: {
+        serial: (state.playbackCommand?.serial ?? 0) + 1,
+        kind,
+        index,
+      },
     }));
   };
 
@@ -163,12 +242,15 @@ export const useAppStore = create<AppState>((set, get) => {
     gizmoMode: 'translate',
     stepRequest: 0,
     resetRequest: 0,
+    playback: idlePlaybackRuntime(initialPlayback),
+    playbackCommand: null,
     past: [],
     future: [],
     historyAt: 0,
     autosave: true,
 
     setScene: (scene, opts) => {
+      if (playbackLocked()) return;
       if (opts?.history !== false) pushHistory(get().scene, true);
       set((state) => ({
         scene,
@@ -183,6 +265,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     loadPreset: (id) => {
+      if (playbackLocked()) return;
       const preset = getPreset(id);
       if (!preset) return;
       const scene = preset.create();
@@ -207,6 +290,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setMode: (mode) => {
+      if (playbackLocked()) return;
       const state = get();
       if (state.scene.mode === mode) return;
       pushHistory(state.scene, true);
@@ -258,10 +342,29 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
 
-    rewindSimulation: () => restartRuntime(false),
-    replaySimulation: () => restartRuntime(true),
+    rewindSimulation: () => {
+      const state = get();
+      if (state.playback.mode === 'cached') {
+        set({ playing: false });
+        issuePlaybackCommand('seek', 0);
+        return;
+      }
+      if (state.playback.mode === 'computing') return;
+      restartRuntime(false);
+    },
+    replaySimulation: () => {
+      const state = get();
+      if (state.playback.mode === 'cached') {
+        set({ playing: true });
+        issuePlaybackCommand('seek', 0);
+        return;
+      }
+      if (state.playback.mode === 'computing') return;
+      restartRuntime(true);
+    },
 
     resetScene: () => {
+      if (playbackLocked()) return;
       const { presetId, scene } = get();
       const preset = presetId ? getPreset(presetId) : undefined;
       const next = preset ? preset.create() : cloneScene(scene);
@@ -281,6 +384,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     updateObject: (id, patch, history = true) => {
+      if (playbackLocked()) return;
       const prev = get().scene;
       if (history) pushHistory(prev);
       set({
@@ -294,6 +398,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     addObject: (obj) => {
+      if (playbackLocked()) return;
       const prev = get().scene;
       pushHistory(prev, true);
       const magnetic = ['wire', 'loop', 'coil', 'magnet'].includes(obj.kind);
@@ -313,6 +418,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     removeObject: (id) => {
+      if (playbackLocked()) return;
       const prev = get().scene;
       pushHistory(prev, true);
       set({
@@ -322,6 +428,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     duplicateSelected: () => {
+      if (playbackLocked()) return;
       const { selectedId, scene } = get();
       const obj = scene.objects.find((o) => o.id === selectedId);
       if (!obj) return;
@@ -353,16 +460,81 @@ export const useAppStore = create<AppState>((set, get) => {
     }),
     clearChart: () => set({ chart: { series: [], points: [] } }),
     setError: (error) => set({ error }),
-    setDisplay: (patch) => set((state) => ({
-      scene: { ...state.scene, display: { ...state.scene.display, ...patch } },
-    })),
+    setDisplay: (patch) => {
+      if (playbackLocked()) return;
+      set((state) => ({
+        scene: { ...state.scene, display: { ...state.scene.display, ...patch } },
+      }));
+    },
     setSimulation: (patch) => {
       const state = get();
+      const keys = Object.keys(patch) as Array<keyof Scene['simulation']>;
+      let playbackPatch: Partial<PlaybackSettings> | undefined;
+      if (playbackLocked()) {
+        if (!(keys.length === 1 && keys[0] === 'playback') || !patch.playback) return;
+        const current = state.scene.simulation.playback ?? defaultPlayback();
+        const entries = Object.entries(patch.playback) as Array<[keyof PlaybackSettings, PlaybackSettings[keyof PlaybackSettings]]>;
+        if (entries.some(([key, value]) => key !== 'fps' && key !== 'loop' && current[key] !== value)) return;
+        playbackPatch = patch.playback;
+      }
       if (Object.entries(patch).every(([key, value]) => state.scene.simulation[key as keyof Scene['simulation']] === value)) return;
       pushHistory(state.scene, true);
       set({ scene: { ...state.scene, simulation: { ...state.scene.simulation, ...patch } } });
-      if (Object.keys(patch).some(key => key !== 'stepsPerFrame' && key !== 'timeScale' && key !== 'targetTime')) restartRuntime(false);
+      if (playbackPatch) {
+        set((next) => ({
+          playback: {
+            ...next.playback,
+            ...(playbackPatch!.fps !== undefined ? { fps: playbackPatch!.fps } : {}),
+            ...(playbackPatch!.loop !== undefined ? { loop: playbackPatch!.loop } : {}),
+          },
+        }));
+      }
+      if (keys.some(key => key !== 'stepsPerFrame' && key !== 'timeScale' && key !== 'targetTime' && key !== 'playback')) restartRuntime(false);
     },
+    setPlayback: (patch) => set((state) => ({ playback: { ...state.playback, ...patch } })),
+    updatePlaybackSettings: (patch) => {
+      const state = get();
+      const current = state.scene.simulation.playback ?? defaultPlayback();
+      if (state.playback.mode !== 'idle') {
+        const keys = Object.keys(patch) as Array<keyof PlaybackSettings>;
+        if (keys.some(key => key !== 'fps' && key !== 'loop')) return;
+      }
+      const next = { ...current, ...patch };
+      if (Object.entries(patch).every(([key, value]) => current[key as keyof PlaybackSettings] === value)) return;
+      pushHistory(state.scene, true);
+      set({
+        scene: {
+          ...state.scene,
+          simulation: { ...state.scene.simulation, playback: next },
+        },
+        playback: {
+          ...state.playback,
+          ...(patch.fps !== undefined ? { fps: next.fps } : {}),
+          ...(patch.loop !== undefined ? { loop: next.loop } : {}),
+        },
+      });
+    },
+    requestPrecompute: () => {
+      if (get().playback.mode === 'computing') return;
+      issuePlaybackCommand('precompute');
+    },
+    cancelPlayback: () => {
+      if (get().playback.mode === 'idle') return;
+      issuePlaybackCommand('cancel');
+    },
+    requestPlaybackSeek: (index) => {
+      if (get().playback.mode !== 'cached') return;
+      issuePlaybackCommand('seek', index);
+    },
+    exitPlayback: () => {
+      if (playbackLocked()) issuePlaybackCommand('exit');
+    },
+    replaceChart: (points) => set(() => ({
+      chart: {
+        series: Array.from(new Set(points.flatMap((point) => Object.keys(point.values)))),
+        points: points.slice(-900),
+      },
+    })),
     togglePanel: (key) => set((state) => ({ panels: { ...state.panels, [key]: !state.panels[key] } })),
     setRightTab: (rightTab) => set({ rightTab }),
     setLeftTab: (leftTab) => set({ leftTab }),
@@ -370,9 +542,13 @@ export const useAppStore = create<AppState>((set, get) => {
       cameraMode,
       cameraRequest: state.cameraRequest + 1,
     })),
-    setGizmoMode: (gizmoMode) => set({ gizmoMode }),
+    setGizmoMode: (gizmoMode) => {
+      if (playbackLocked()) return;
+      set({ gizmoMode });
+    },
     requestStep: () => set((state) => ({ stepRequest: state.stepRequest + 1 })),
     undo: () => {
+      if (playbackLocked()) return;
       const { past, scene, future } = get();
       if (past.length === 0) return;
       const previous = past[past.length - 1];
@@ -384,6 +560,7 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
     redo: () => {
+      if (playbackLocked()) return;
       const { future, scene, past } = get();
       if (future.length === 0) return;
       const next = future[0];

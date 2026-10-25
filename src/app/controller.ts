@@ -1,8 +1,9 @@
-import type { Scene } from '../scene/types';
+import type { PlaybackSettings, Scene, TimeSeriesPoint } from '../scene/types';
 import { isProbe } from '../scene/types';
 import { fieldBus } from './fieldBus';
 import type { LatticePayload } from './fieldBus';
 import type {
+  FdtdFrame,
   FdtdRequest,
   FdtdResponse,
   StaticsRequest,
@@ -15,7 +16,19 @@ import { InductionSystem } from '../engine/induction/system';
 import type { InductionFrame } from '../engine/induction/system';
 import { isParticle } from '../scene/types';
 import { maxwellRunBudget } from '../engine/maxwell/runBudget';
-import { useAppStore } from './store';
+import {
+  planPlaybackSamples,
+  type PlaybackPlan,
+} from '../engine/maxwell/playbackSchedule';
+import {
+  PLAYBACK_CACHE_LIMIT_BYTES,
+  estimateFrameBytes,
+  framePayloadBytes,
+} from '../engine/maxwell/playbackPayload';
+import { defaultPlayback } from '../scene/defaults';
+import { appendPlaybackFrame, createPlaybackCache, type PlaybackCache } from './playbackCache';
+import { PlaybackEngine } from './playbackEngine';
+import { idlePlaybackRuntime, useAppStore, type PlaybackCommand } from './store';
 
 function physicsKey(scene: Scene): string {
   return JSON.stringify({
@@ -73,16 +86,41 @@ export class SimulationController {
   private latestMotion: InductionFrame | null = null;
   private fieldFrameAt = 0;
   private probeRequest = 0;
+  private playbackCache: PlaybackCache | null = null;
+  private playbackEngine: PlaybackEngine | null = null;
+  private playbackMode: 'idle' | 'computing' | 'cached' = 'idle';
+  private playbackRequestId = 0;
+  private playbackPhysicsKey = '';
+  private playbackDisplayKey = '';
 
   update(scene: Scene, playing: boolean): void {
     if (this.disposed) return;
     const modeChanged = scene.mode !== this.mode;
     const pKey = physicsKey(scene);
     const dKey = displayKey(scene);
-    const physicsChanged = pKey !== this.physics || modeChanged;
+    let forceReinit = false;
+    if (this.playbackMode !== 'idle' &&
+      (pKey !== this.playbackPhysicsKey || dKey !== this.playbackDisplayKey || modeChanged)) {
+      // Object, physics or display edits invalidate the cached display payload.
+      // Drop it, then fall through to a clean live initialization.
+      this.discardPlaybackState();
+      forceReinit = true;
+    }
+    const physicsChanged = forceReinit || pKey !== this.physics || modeChanged;
     this.scene = scene;
     this.playing = playing;
     this.mode = scene.mode;
+
+    if (this.playbackMode !== 'idle') {
+      if (this.playbackMode === 'cached') {
+        const settings = scene.simulation.playback ?? defaultPlayback();
+        this.playbackEngine?.setOptions({ fps: settings.fps, loop: settings.loop });
+        if (this.playbackEngine && this.playbackEngine.state.playing !== playing) {
+          this.playbackEngine.setPlaying(playing);
+        }
+      }
+      return;
+    }
 
     if (physicsChanged) {
       if (!this.initialized || modeChanged) {
@@ -129,6 +167,9 @@ export class SimulationController {
   }
 
   private reinit(scene: Scene): void {
+    // Defensive: any reset path must not leave a cached playback clock running
+    // over frames that belong to the previous solver generation.
+    if (this.playbackMode !== 'idle') this.discardPlaybackState();
     this.generation++;
     this.fieldFramePending = false;
     this.fieldFrameDirty = false;
@@ -337,12 +378,102 @@ export class SimulationController {
 
   private onFdtd(msg: FdtdResponse): void {
     if (msg.type === 'error') {
-      if (msg.generation === this.generation) this.fail(msg.message);
+      if (msg.generation !== this.generation) return;
+      if (this.playbackMode !== 'idle') {
+        this.abortPlaybackToLive(msg.message);
+        return;
+      }
+      this.fail(msg.message);
       return;
     }
     if (msg.generation !== this.generation) return;
     const store = useAppStore.getState();
+
+    if (msg.type === 'precompute-start') {
+      if (this.playbackMode !== 'computing' || msg.requestId !== this.playbackRequestId) return;
+      this.playbackCache = createPlaybackCache(msg.plan, msg.meta);
+      store.setFdtdMeta(msg.meta);
+      store.setPlayback({
+        requestId: msg.requestId,
+        mode: 'computing',
+        frameCount: msg.plan.sampleSteps.length,
+        totalFrames: msg.plan.sampleSteps.length,
+        framesDone: 0,
+        frameIndex: 0,
+        steps: 0,
+        totalSteps: msg.plan.totalSteps,
+        bytes: 0,
+        frameBytes: 0,
+        startTime: msg.plan.sampleTimes[0] ?? 0,
+        endTime: msg.plan.sampleTimes.at(-1) ?? 0,
+        sampleTimes: [...msg.plan.sampleTimes],
+        phase: msg.plan.startStep > 0 ? 'warmup' : 'sampling',
+        startedAt: Date.now(),
+        elapsedMs: 0,
+        stepsPerSecond: 0,
+      });
+      return;
+    }
+    if (msg.type === 'precompute-progress') {
+      if (this.playbackMode !== 'computing' || msg.requestId !== this.playbackRequestId) return;
+      store.setPlayback({
+        phase: msg.phase,
+        steps: msg.steps,
+        totalSteps: msg.totalSteps,
+        framesDone: msg.sampleIndex,
+        elapsedMs: msg.elapsedMs,
+        stepsPerSecond: msg.stepsPerSecond,
+        bytes: msg.sampledBytes,
+      });
+      return;
+    }
+    if (msg.type === 'precompute-frame') {
+      if (this.playbackMode !== 'computing' || msg.requestId !== this.playbackRequestId || !this.playbackCache) return;
+      const bytes = framePayloadBytes(msg.frame);
+      if (!appendPlaybackFrame(this.playbackCache, msg.frame, bytes)) {
+        this.abortPlaybackToLive(
+          `Cached playback exceeded the ${(PLAYBACK_CACHE_LIMIT_BYTES / 1024 ** 2).toFixed(0)} MiB reduced-frame payload limit. Shorten the window or reduce display sampling.`,
+        );
+        return;
+      }
+      store.setPlayback({
+        framesDone: this.playbackCache.frames.length,
+        steps: msg.frame.steps,
+        bytes: this.playbackCache.bytes,
+        frameBytes: bytes,
+      });
+      return;
+    }
+    if (msg.type === 'precompute-done') {
+      if (this.playbackMode !== 'computing' || msg.requestId !== this.playbackRequestId || !this.playbackCache) return;
+      if (this.playbackCache.frames.length !== msg.sampleCount || this.playbackCache.bytes > PLAYBACK_CACHE_LIMIT_BYTES) {
+        this.abortPlaybackToLive('Cached playback finished with an inconsistent frame set.');
+        return;
+      }
+      this.playbackMode = 'cached';
+      this.playing = false;
+      store.setPlaying(false);
+      store.setPlayback({
+        mode: 'cached',
+        framesDone: msg.sampleCount,
+        frameIndex: 0,
+        steps: msg.steps,
+        bytes: msg.sampledBytes,
+        elapsedMs: msg.elapsedMs,
+      });
+      store.setStatus({ phase: 'ready' });
+      this.replacePlaybackChart();
+      this.startPlaybackEngine();
+      return;
+    }
+    if (msg.type === 'precompute-cancelled') {
+      if (this.playbackMode !== 'computing' || msg.requestId !== this.playbackRequestId) return;
+      this.abortPlaybackToLive('Cached precompute cancelled.');
+      return;
+    }
+
     if (msg.type === 'ready') {
+      if (this.playbackMode !== 'idle') return;
       this.fdtdReady = true;
       store.setFdtdMeta(msg.meta);
       store.setStatus({ phase: 'ready' });
@@ -354,6 +485,7 @@ export class SimulationController {
       });
       this.fdtdWorker?.postMessage({ type: this.playing ? 'start' : 'pause' } as FdtdRequest);
     } else if (msg.type === 'frame') {
+      if (this.playbackMode !== 'idle') return;
       // Target edits do not rebuild physics. A queued frame may still refer to
       // the old target, so evaluate its step against the latest authored target.
       if (msg.targetReached && this.scene?.simulation.useApproximation === false) {
@@ -362,43 +494,17 @@ export class SimulationController {
         catch { /* The worker reports an invalid imported/configured target. */ }
         if (reached) { this.playing = false; store.setPlaying(false); }
       }
-      store.setTime(msg.time);
-      store.setFdtdMeta(msg.meta);
-      store.setMeasurements({
-        electricEnergy: msg.energy.electric,
-        magneticEnergy: msg.energy.magnetic,
-        dt: msg.meta.dt,
-        dx: msg.meta.dx,
-        frequency: msg.meta.frequency,
-        wavelength: msg.meta.frequency > 0 ? 299792458 / msg.meta.frequency : 0,
-      });
-      const probes = msg.probes.map((p) => ({
-        id: p.id,
-        position: p.position,
-        E: p.sample.E,
-        B: p.sample.B,
-        D: p.sample.D,
-        H: p.sample.H,
-        J: p.sample.J,
-        rho: p.sample.rho,
-        phi: 0,
-        Emag: p.sample.Emag,
-        Bmag: p.sample.Bmag,
-      }));
-      store.setProbes(probes);
-      fieldBus.emit('fdtd-frame', msg);
-      if (msg.transforms) fieldBus.emit('induction-frame', { time: msg.time, transforms: msg.transforms, readings: [] });
-      if (msg.lines) fieldBus.emit('statics-lines', msg.lines);
+      this.applyFdtdFrame(msg);
       if (msg.diagnostics) store.setMeasurements({ extra: { ...msg.diagnostics, steps: msg.steps } });
       const now = performance.now();
-      if (now - this.lastChartAt > 70 && probes.length > 0) {
+      if (now - this.lastChartAt > 70 && msg.probes.length > 0) {
         this.lastChartAt = now;
-        for (const p of probes) {
+        for (const p of msg.probes) {
           store.appendChart({
             t: msg.time,
             values: {
-              [`${p.id}:E`]: p.Emag,
-              [`${p.id}:B`]: p.Bmag,
+              [`${p.id}:E`]: p.sample.Emag,
+              [`${p.id}:B`]: p.sample.Bmag,
             },
           });
         }
@@ -406,8 +512,228 @@ export class SimulationController {
     }
   }
 
+  private applyFdtdFrame(frame: FdtdFrame): void {
+    const store = useAppStore.getState();
+    store.setTime(frame.time);
+    store.setFdtdMeta(frame.meta);
+    store.setMeasurements({
+      electricEnergy: frame.energy.electric,
+      magneticEnergy: frame.energy.magnetic,
+      dt: frame.meta.dt,
+      dx: frame.meta.dx,
+      frequency: frame.meta.frequency,
+      wavelength: frame.meta.frequency > 0 ? 299792458 / frame.meta.frequency : 0,
+    });
+    store.setProbes(frame.probes.map((p) => ({
+      id: p.id,
+      position: p.position,
+      E: p.sample.E,
+      B: p.sample.B,
+      D: p.sample.D,
+      H: p.sample.H,
+      J: p.sample.J,
+      rho: p.sample.rho,
+      phi: 0,
+      Emag: p.sample.Emag,
+      Bmag: p.sample.Bmag,
+    })));
+    fieldBus.emit('fdtd-frame', frame);
+    if (frame.transforms) fieldBus.emit('induction-frame', { time: frame.time, transforms: frame.transforms, readings: [] });
+    if (frame.lines) fieldBus.emit('statics-lines', frame.lines);
+  }
+
+  private emitCachedFrame(index: number): void {
+    const cache = this.playbackCache;
+    if (!cache || !Number.isInteger(index) || index < 0 || index >= cache.frames.length) return;
+    const frame: FdtdFrame = {
+      ...cache.frames[index],
+      type: 'frame',
+      generation: this.generation,
+      meta: cache.header.meta,
+    };
+    this.applyFdtdFrame(frame);
+  }
+
+  private startPlaybackEngine(): void {
+    const cache = this.playbackCache;
+    if (!cache) return;
+    this.stopPlaybackEngine();
+    const settings = this.scene?.simulation.playback ?? defaultPlayback();
+    this.playbackEngine = new PlaybackEngine(cache.frames.length, {
+      emitFrame: (index) => this.emitCachedFrame(index),
+      onState: ({ frameIndex, playing }) => {
+        const store = useAppStore.getState();
+        store.setPlayback({ frameIndex });
+        if (store.playing !== playing) store.setPlaying(playing);
+      },
+      now: () => performance.now(),
+      requestFrame: (cb) => requestAnimationFrame(cb),
+      cancelFrame: (id) => cancelAnimationFrame(id),
+    }, { fps: settings.fps, loop: settings.loop });
+    this.playbackEngine.start(0, false);
+  }
+
+  private stopPlaybackEngine(): void {
+    this.playbackEngine?.stop();
+    this.playbackEngine = null;
+  }
+
+  private replacePlaybackChart(): void {
+    const cache = this.playbackCache;
+    if (!cache) return;
+    const points: TimeSeriesPoint[] = cache.frames.map((frame) => ({
+      t: frame.time,
+      values: Object.fromEntries(frame.probes.flatMap((probe) => [
+        [`${probe.id}:E`, probe.sample.Emag],
+        [`${probe.id}:B`, probe.sample.Bmag],
+      ])),
+    }));
+    const stride = Math.max(1, Math.ceil(points.length / 900));
+    const sampled = points.filter((_, i) => i % stride === 0);
+    if (points.length > 0 && sampled.at(-1)?.t !== points.at(-1)!.t) sampled.push(points.at(-1)!);
+    useAppStore.getState().replaceChart(sampled);
+  }
+
+  private discardPlaybackState(): void {
+    this.stopPlaybackEngine();
+    this.playbackCache = null;
+    this.playbackMode = 'idle';
+    this.playbackRequestId++;
+    this.playbackPhysicsKey = '';
+    this.playbackDisplayKey = '';
+    const settings = this.scene?.simulation.playback ?? defaultPlayback();
+    useAppStore.getState().setPlayback(idlePlaybackRuntime(settings));
+  }
+
+  private abortPlaybackToLive(message: string): void {
+    const requestId = this.playbackRequestId;
+    const wasComputing = this.playbackMode === 'computing';
+    this.discardPlaybackState();
+    if (wasComputing) {
+      this.fdtdWorker?.postMessage({ type: 'precompute-cancel', generation: this.generation, requestId } as FdtdRequest);
+    }
+    this.playing = false;
+    useAppStore.getState().setPlaying(false);
+    this.reset();
+    this.fail(message);
+  }
+
+  startPrecompute(): void {
+    if (this.disposed || !this.scene || this.playbackMode === 'computing') return;
+    const scene = this.scene;
+    const meta = useAppStore.getState().fdtdMeta;
+    if (scene.simulation.useApproximation !== false || !this.fdtdReady || !meta || this.reinitTimer) {
+      this.fail('Cached precompute requires a ready full Maxwell solver. Wait for preparation to finish.');
+      return;
+    }
+    const settings = scene.simulation.playback ?? defaultPlayback();
+    let plan: PlaybackPlan;
+    try {
+      plan = planPlaybackSamples(settings, meta.dt);
+    } catch (err) {
+      this.fail(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    const probes = scene.objects.filter((o) => isProbe(o) && o.visible).length;
+    const transforms = scene.objects.filter((o) => o.visible).length;
+    const frameBytes = estimateFrameBytes(scene.display, meta, { probes, transforms });
+    if (plan.sampleSteps.length * frameBytes > PLAYBACK_CACHE_LIMIT_BYTES) {
+      const maxFrames = Math.max(2, Math.floor(PLAYBACK_CACHE_LIMIT_BYTES / Math.max(1, frameBytes)));
+      this.fail(`The estimated reduced-frame payload exceeds the ${(PLAYBACK_CACHE_LIMIT_BYTES / 1024 ** 2).toFixed(0)} MiB cache limit. Use at most about ${maxFrames} frames or reduce display sampling.`);
+      return;
+    }
+    if (this.playbackMode === 'cached') this.discardPlaybackState();
+    this.playbackMode = 'computing';
+    this.playbackPhysicsKey = physicsKey(scene);
+    this.playbackDisplayKey = displayKey(scene);
+    this.playbackRequestId++;
+    this.playing = false;
+    this.stopParticles();
+    const store = useAppStore.getState();
+    store.setPlaying(false);
+    store.setTime(0);
+    store.setProbes([]);
+    store.setMeasurements({});
+    store.clearChart();
+    store.setStatus({ phase: 'solving' });
+    store.setPlayback({
+      ...idlePlaybackRuntime(settings),
+      mode: 'computing',
+      requestId: this.playbackRequestId,
+      frameCount: plan.sampleSteps.length,
+      totalFrames: plan.sampleSteps.length,
+      totalSteps: plan.totalSteps,
+      startTime: plan.sampleTimes[0] ?? 0,
+      endTime: plan.sampleTimes.at(-1) ?? 0,
+      sampleTimes: [...plan.sampleTimes],
+      phase: plan.startStep > 0 ? 'warmup' : 'sampling',
+      startedAt: Date.now(),
+    });
+    this.fdtdWorker?.postMessage({ type: 'pause' } as FdtdRequest);
+    this.fdtdWorker?.postMessage({ type: 'config', generation: this.generation, scene } as FdtdRequest);
+    this.fdtdWorker?.postMessage({
+      type: 'precompute',
+      generation: this.generation,
+      requestId: this.playbackRequestId,
+      plan: {
+        startTime: settings.startTime,
+        endTime: settings.endTime,
+        sampleMode: settings.sampleMode,
+        sampleCount: settings.sampleCount,
+        sampleInterval: settings.sampleInterval,
+      },
+    } as FdtdRequest);
+  }
+
+  cancelPrecompute(): void {
+    if (this.playbackMode === 'idle') return;
+    const requestId = this.playbackRequestId;
+    const wasComputing = this.playbackMode === 'computing';
+    this.discardPlaybackState();
+    if (wasComputing) {
+      this.fdtdWorker?.postMessage({ type: 'precompute-cancel', generation: this.generation, requestId } as FdtdRequest);
+    }
+    this.playing = false;
+    this.useStore().setPlaying(false);
+    this.reset();
+  }
+
+  exitPlayback(): void {
+    if (this.playbackMode === 'idle') return;
+    this.discardPlaybackState();
+    const store = this.useStore();
+    store.setPlaying(false);
+    store.setTime(0);
+    store.setProbes([]);
+    store.setMeasurements({});
+    store.clearChart();
+    this.playing = false;
+    this.reset();
+  }
+
+  seekPlayback(index: number): void {
+    if (this.playbackMode !== 'cached') return;
+    this.playbackEngine?.seek(index);
+  }
+
+  handlePlaybackCommand(command: PlaybackCommand): void {
+    if (command.kind === 'precompute') this.startPrecompute();
+    else if (command.kind === 'cancel') this.cancelPrecompute();
+    else if (command.kind === 'seek') this.seekPlayback(command.index ?? 0);
+    else if (command.kind === 'exit') this.exitPlayback();
+  }
+
+  private useStore() {
+    return useAppStore.getState();
+  }
+
   play(playing: boolean): void {
     this.playing = playing;
+    if (this.playbackMode === 'cached') {
+      this.playbackEngine?.setPlaying(playing);
+      return;
+    }
+    if (this.playbackMode === 'computing') return;
     if (this.mode === 'waves' || this.scene?.simulation.useApproximation === false) {
       this.fdtdWorker?.postMessage({ type: playing ? 'start' : 'pause' } as FdtdRequest);
     }
@@ -415,6 +741,11 @@ export class SimulationController {
   }
 
   step(): void {
+    if (this.playbackMode === 'cached') {
+      this.playbackEngine?.step(1);
+      return;
+    }
+    if (this.playbackMode === 'computing') return;
     if (this.mode === 'waves' || this.scene?.simulation.useApproximation === false) {
       this.fdtdWorker?.postMessage({ type: 'pause' } as FdtdRequest);
       this.fdtdWorker?.postMessage({ type: 'singleStep' } as FdtdRequest);
@@ -560,6 +891,8 @@ export class SimulationController {
   dispose(): void {
     this.disposed = true;
     this.stopParticles();
+    this.stopPlaybackEngine();
+    this.playbackCache = null;
     this.terminateStatics();
     this.terminateFdtd();
     if (this.sliceTimer) clearTimeout(this.sliceTimer);

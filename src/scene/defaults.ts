@@ -13,6 +13,7 @@ import type {
   MagnetObject,
   ParticleObject,
   PlaneWaveObject,
+  PlaybackSettings,
   PointSourceObject,
   ProbeObject,
   Scene,
@@ -59,6 +60,18 @@ export function defaultDisplay(): DisplaySettings {
   };
 }
 
+export function defaultPlayback(): PlaybackSettings {
+  return {
+    startTime: 0,
+    endTime: 1e-8,
+    sampleMode: 'count',
+    sampleCount: 120,
+    sampleInterval: 1e-10,
+    fps: 30,
+    loop: true,
+  };
+}
+
 export function defaultSimulation(): SimulationSettings {
   return {
     useApproximation: true,
@@ -71,6 +84,7 @@ export function defaultSimulation(): SimulationSettings {
     cfl: 0.9,
     stepsPerFrame: 2,
     timeScale: 1,
+    playback: defaultPlayback(),
   };
 }
 

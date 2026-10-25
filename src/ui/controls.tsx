@@ -247,11 +247,13 @@ export function Segmented<T extends string>({
   options,
   onChange,
   size = 'md',
+  disabled = false,
 }: {
   value: T;
   options: Array<{ value: T; label: string; icon?: React.ReactNode; title?: string }>;
   onChange: (v: T) => void;
   size?: 'sm' | 'md';
+  disabled?: boolean;
 }) {
   return (
     <div className={`segmented segmented-${size}`}>
@@ -262,6 +264,7 @@ export function Segmented<T extends string>({
           className={value === o.value ? 'active' : ''}
           onClick={() => onChange(o.value)}
           title={o.title}
+          disabled={disabled}
         >
           {o.icon}{o.label}
         </button>

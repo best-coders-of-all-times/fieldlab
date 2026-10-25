@@ -16,6 +16,7 @@ import type {
   DisplaySettings,
   ProbeObject,
 } from '../scene/types';
+import type { PlaybackPlan, PlaybackPlanInput } from '../engine/maxwell/playbackSchedule';
 
 export type StaticsRequest =
   | { type: 'init'; generation: number; scene: Scene }
@@ -134,15 +135,71 @@ export interface FdtdFrame {
   targetReached?: boolean;
 }
 
+/** Reduced frame stored in the playback cache; cache-wide metadata is shared. */
+export type CachedFdtdFrame = Omit<
+  FdtdFrame,
+  'type' | 'generation' | 'meta' | 'diagnostics' | 'targetReached'
+>;
+
 export type FdtdRequest =
   | { type: 'init'; generation: number; scene: Scene }
   | { type: 'start' }
   | { type: 'pause' }
   | { type: 'reset' }
   | { type: 'config'; generation: number; scene: Scene }
-  | { type: 'singleStep' };
+  | { type: 'singleStep' }
+  | {
+      type: 'precompute';
+      generation: number;
+      requestId: number;
+      plan: PlaybackPlanInput;
+    }
+  | { type: 'precompute-cancel'; generation: number; requestId: number };
 
 export type FdtdResponse =
   | { type: 'ready'; generation: number; meta: FdtdMeta }
   | FdtdFrame
+  | {
+      type: 'precompute-start';
+      generation: number;
+      requestId: number;
+      meta: FdtdMeta;
+      plan: PlaybackPlan;
+    }
+  | {
+      type: 'precompute-progress';
+      generation: number;
+      requestId: number;
+      phase: 'warmup' | 'sampling';
+      steps: number;
+      totalSteps: number;
+      sampleIndex: number;
+      sampleCount: number;
+      elapsedMs: number;
+      stepsPerSecond: number;
+      sampledBytes: number;
+    }
+  | {
+      type: 'precompute-frame';
+      generation: number;
+      requestId: number;
+      index: number;
+      frame: CachedFdtdFrame;
+      payloadBytes: number;
+    }
+  | {
+      type: 'precompute-done';
+      generation: number;
+      requestId: number;
+      sampleCount: number;
+      steps: number;
+      elapsedMs: number;
+      sampledBytes: number;
+    }
+  | {
+      type: 'precompute-cancelled';
+      generation: number;
+      requestId: number;
+      steps: number;
+    }
   | { type: 'error'; generation: number; message: string };

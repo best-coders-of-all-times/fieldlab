@@ -51,6 +51,16 @@ Selecting evolving Maxwell equations for these models does not mean that the ful
 - **View** controls field lines, arrows, slices and opacity. Transparency is visual only. Scenes autosave to `localStorage`; Export/Import preserves the authored JSON definition.
 - Drag to orbit, scroll to zoom, right-drag to pan; click to select. **Delete** removes selection, **G/R/S** changes the gizmo, **1–4** selects camera views, and **F** resets the camera.
 
+## Cached Maxwell playback
+
+Full Maxwell mode adds **Solve → Cached playback**. Author a physical start/end window, either a frame count or a sample interval, a display rate of 12/24/30/60 frames per wall second, and an optional loop. **Precompute** resets the existing Maxwell worker to `t = 0`, computes to the end of the authored window, and stores reduced display frames.
+
+This is a slideshow of real sampled solver states, not interpolation and not a saved solver snapshot. It reuses the live worker, so starting a precompute replaces the current live run. **Return to live** restarts live fields at `t = 0`; it does not resume the old playhead. The author window is saved in the scene, while cached frames, progress, frame index and playback mode are session-only and disappear on reload.
+
+While computing or playing cached frames, object, physics, display and preset edits are locked; camera orbit/zoom/pan and camera views remain active. Rewind/replay become **Go to cached start** / **Replay cached samples**. The cached chart shows the authored window, with a playhead at the exact sampled time.
+
+The cache holds at most 256 MiB of reduced-frame payload (warning at 192 MiB), at most 1200 frames and at most 5,000,000 field steps from `t = 0`. Payload accounting excludes solver working memory, JavaScript object overhead, rendering geometry and GPU memory, so it is not a browser-memory measurement. Long windows or dense slices can still be expensive; the panel shows the measured stepping rate and estimates before starting.
+
 ## Resolution, startup and cost
 
 Resolve source width, motion, interfaces and the highest significant source frequency, including its startup ramp. Abrupt current/velocity starts and under-resolved charge shapes can produce persistent grid ringing. Smooth source history and spatial/time/domain refinement are required before interpreting weak B or radiation. Frequencies and velocities are never silently rescaled to speed up a mechanical cycle.

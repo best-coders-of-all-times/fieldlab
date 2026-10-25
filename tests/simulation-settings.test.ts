@@ -164,6 +164,25 @@ describe('simulation model migration', () => {
     expect(after.resetRequest).toBe(before.resetRequest);
     expect(after.measurements.electricEnergy).toBe(9);
   });
+  it('changes authored playback settings without resetting live runtime or checking the cache', () => {
+    const scene = makeScene({ name: 'playback settings' });
+    useAppStore.setState({
+      scene, time: 4e-9, playing: true, measurements: { electricEnergy: 9 },
+      playback: { ...useAppStore.getState().playback, mode: 'cached', frameIndex: 3, frameCount: 8 },
+    });
+    const before = useAppStore.getState();
+    before.updatePlaybackSettings({ fps: 60, loop: false });
+    const after = useAppStore.getState();
+    expect(after.scene.simulation.playback).toMatchObject({ fps: 60, loop: false });
+    expect(after.playback).toMatchObject({ fps: 60, loop: false, mode: 'cached', frameIndex: 3 });
+    expect(after.time).toBe(4e-9);
+    expect(after.playing).toBe(true);
+    expect(after.resetRequest).toBe(before.resetRequest);
+    expect(after.measurements.electricEnergy).toBe(9);
+    expect(restoreScene(JSON.parse(JSON.stringify(after.scene)), before.scene)!.simulation.playback)
+      .toMatchObject({ fps: 60, loop: false });
+  });
+
   it('changes a saved physical target without resetting time, fields or playback', () => {
     useAppStore.setState({ time: 4e-9, playing: true, measurements: { electricEnergy: 9 } });
     const before = useAppStore.getState();

@@ -22,8 +22,11 @@ export function TopBar() {
   const past = useAppStore((s) => s.past.length);
   const future = useAppStore((s) => s.future.length);
   const presetId = useAppStore((s) => s.presetId);
+  const playback = useAppStore((s) => s.playback);
   const [help, setHelp] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const locked = playback.mode !== 'idle';
+  const computing = playback.mode === 'computing';
 
   const requestStep = useAppStore((s) => s.requestStep);
   const step = () => {
@@ -57,15 +60,20 @@ export function TopBar() {
     }
   };
 
-  const statusLabel = status.phase === 'solving'
-    ? 'solving'
-    : status.phase === 'ready'
-      ? status.solveMs
-        ? `ready · ${Math.round(status.solveMs)} ms`
-        : 'ready'
-      : status.phase === 'error'
-        ? 'error'
-        : 'idle';
+  const statusLabel = computing
+    ? `precomputing ${playback.framesDone}/${playback.totalFrames}`
+    : playback.mode === 'cached'
+      ? `cached ${playback.frameIndex + 1}/${playback.frameCount}`
+      : status.phase === 'solving'
+        ? 'solving'
+        : status.phase === 'ready'
+          ? status.solveMs
+            ? `ready · ${Math.round(status.solveMs)} ms`
+            : 'ready'
+          : status.phase === 'error'
+            ? 'error'
+            : 'idle';
+  const statusClass = computing ? 'solving' : playback.mode === 'cached' ? 'ready playback' : status.phase;
 
   return (
     <>
@@ -82,17 +90,18 @@ export function TopBar() {
           <button
             className={`icon-btn primary ${playing ? 'active' : ''}`}
             onClick={() => setPlaying(!playing)}
-            title={playing ? 'Pause (space)' : 'Play (space)'}
+            disabled={computing}
+            title={computing ? 'Precompute in progress' : playing ? 'Pause (space)' : 'Play (space)'}
           >
             <Icon name={playing ? 'pause' : 'play'} size={17} />
           </button>
-          <button className="icon-btn" onClick={step} title="Single step">
+          <button className="icon-btn" onClick={step} disabled={computing} title={playback.mode === 'cached' ? 'Advance one cached frame' : 'Single step'}>
             <Icon name="step" size={16} />
           </button>
-          <button className="icon-btn" onClick={rewindSimulation} title="Rewind to t = 0">
+          <button className="icon-btn" onClick={rewindSimulation} disabled={computing} title={playback.mode === 'cached' ? 'Go to cached start' : 'Rewind to t = 0'}>
             <Icon name="reset" size={16} />
           </button>
-          <button className="icon-btn" onClick={replaySimulation} title="Replay">
+          <button className="icon-btn" onClick={replaySimulation} disabled={computing} title={playback.mode === 'cached' ? 'Replay cached samples' : 'Replay'}>
             <Icon name="play" size={16} />
           </button>
         </div>
@@ -101,7 +110,7 @@ export function TopBar() {
           <b>{formatSci(time, 4)}</b> s
         </div>
 
-        <span className={`status-chip ${status.phase}`}>
+        <span className={`status-chip ${statusClass}`} title={playback.mode === 'cached' ? 'Cached reduced-frame playback is active' : undefined}>
           <span className="status-dot" />
           {statusLabel}
         </span>
@@ -114,13 +123,13 @@ export function TopBar() {
         <span className="top-spacer" />
 
         <div className="top-actions">
-          <button className="icon-btn" onClick={resetScene} disabled={presetId === null} title="Restore preset (discard scene edits)" aria-label="Restore preset">
+          <button className="icon-btn" onClick={resetScene} disabled={locked || presetId === null} title="Restore preset (discard scene edits)" aria-label="Restore preset">
             <Icon name="reset" size={16} />
           </button>
-          <button className="icon-btn" onClick={undo} disabled={past === 0} title="Undo (Ctrl+Z)">
+          <button className="icon-btn" onClick={undo} disabled={locked || past === 0} title="Undo (Ctrl+Z)">
             <Icon name="undo" size={16} />
           </button>
-          <button className="icon-btn" onClick={redo} disabled={future === 0} title="Redo (Ctrl+Shift+Z)">
+          <button className="icon-btn" onClick={redo} disabled={locked || future === 0} title="Redo (Ctrl+Shift+Z)">
             <Icon name="redo" size={16} />
           </button>
           <button
@@ -147,7 +156,7 @@ export function TopBar() {
           <button className="icon-btn" onClick={exportScene} title="Export scene JSON">
             <Icon name="download" size={16} />
           </button>
-          <button className="icon-btn" onClick={() => fileRef.current?.click()} title="Import scene JSON">
+          <button className="icon-btn" onClick={() => fileRef.current?.click()} disabled={locked} title="Import scene JSON">
             <Icon name="upload" size={16} />
           </button>
           <input

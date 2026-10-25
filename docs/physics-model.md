@@ -117,6 +117,16 @@ Frequencies, velocities and c are never silently rescaled. With cubic `dx = 0.01
 
 **Rewind to t = 0** pauses and reinitializes the current definition, clearing runtime trails/charts while preserving edits, selection and undo history. **Replay** reinitializes it and starts. **Restore preset** separately restores the library definition and can be undone; it is disabled for custom scenes. Display/probe edits do not advance field time. Physics changes initialize a new run; generations prevent old worker results replacing it.
 
+### Cached Maxwell playback
+
+**Solve → Cached playback** authors a physical time window, a frame count or interval, a wall-clock display rate and a loop flag. Precompute resets the existing Maxwell solver to step 0 and steps one grid update at a time to the requested endpoint, yielding periodically so progress and cancellation remain responsive. At planned grid steps it samples the same reduced display payload used by live rendering and transfers those typed arrays to the main thread. The cache is session-only; only the authored settings are serialized in the scene.
+
+Playback advances a display-frame clock, not the solver. Each shown state is an exact sampled `t = n·dt`; frames between samples are omitted, not interpolated. The chart's playhead uses the same exact sample time. The display rate is independent of physical time, so a window can represent a tiny physical interval even at 60 fps.
+
+The cache cap is reduced-frame payload bytes (256 MiB hard, 192 MiB warning), not total memory: solver arrays, structured-clone copies, Three.js geometry and GPU resources are additional. The preflight estimate applies the worker's slice/lattice clamps and is reported before starting; the exact received payload is accumulated during compute. Any cap breach discards the partial cache.
+
+Precompute uses the single live worker and therefore destroys the current live run. Return to live reinitializes at `t = 0`; it is not a resume. While computing or cached, object, physics, display and preset changes are locked, while camera navigation remains available. Changed display or physics payloads would invalidate the cached states. If a reset or invalidating update is reached anyway, the cache is discarded and live fields are rebuilt.
+
 Poisson and both FDTD paths already run in local browser Web Workers. Legacy approximation particle/motion/EMF stepping remains on the main thread; experimental supported motion/particles run in the field worker. Rendering uses WebGL. Hosting delivers assets rather than computing fields. Offline Meep does not serve browser sessions. No WebGPU Maxwell backend is currently validated.
 
 **Conservative memory budget** is the solver's admission estimate, not measured live allocation, peak memory or browser RSS. [CPU performance](maxwell-performance.md) separately records retained buffers, preparation, stepping and sampling, with Node/browser worker/transfer/render distinctions.
