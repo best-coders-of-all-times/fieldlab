@@ -7,19 +7,11 @@ import { RightPanel } from '../ui/RightPanel';
 import { ViewportView } from '../ui/ViewportView';
 import { ChartDrawer } from '../ui/Chart';
 import { Icon } from '../ui/Icon';
-import { restoreScene } from './restoreScene';
-
-function saveCurrentScene() {
-  const state = useAppStore.getState();
-  if (!state.autosave) return;
-  try { localStorage.setItem('fieldlab.scene.v1', JSON.stringify(state.scene)); }
-  catch { /* Storage can be unavailable in private contexts. */ }
-}
+import { useScenePersistence } from './useScenePersistence';
 
 export default function App() {
   const scene = useAppStore((s) => s.scene);
   const playing = useAppStore((s) => s.playing);
-  const autosave = useAppStore((s) => s.autosave);
   const panels = useAppStore((s) => s.panels);
   const selectedId = useAppStore((s) => s.selectedId);
   const error = useAppStore((s) => s.error);
@@ -27,18 +19,7 @@ export default function App() {
   const resetRequest = useAppStore((s) => s.resetRequest);
   const playbackCommand = useAppStore((s) => s.playbackCommand);
   const controllerRef = useRef<SimulationController | null>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('fieldlab.scene.v1');
-      if (!raw) return;
-      const restored = restoreScene(JSON.parse(raw), useAppStore.getState().scene);
-      if (restored) useAppStore.getState().setScene(restored, { history: false, presetId: null });
-    } catch {
-      // A corrupt autosave should never block startup.
-    }
-  }, []);
+  const persistence = useScenePersistence();
 
   useEffect(() => {
     const controller = new SimulationController();
@@ -67,37 +48,21 @@ export default function App() {
   }, [playbackCommand]);
 
   useEffect(() => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(saveCurrentScene, 700);
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+    const media = window.matchMedia('(max-width: 1050px)');
+    const resize = () => {
+      if (media.matches) useAppStore.setState(s => ({ panels: { ...s.panels, left: false, right: false } }));
     };
-  }, [scene, autosave]);
-
-  useEffect(() => {
-    // A reload can happen before the debounce expires. Read the store at the
-    // event rather than capturing an earlier render's scene.
-    const onHidden = () => { if (document.visibilityState === 'hidden') saveCurrentScene(); };
-    window.addEventListener('pagehide', saveCurrentScene);
-    document.addEventListener('visibilitychange', onHidden);
-    return () => {
-      window.removeEventListener('pagehide', saveCurrentScene);
-      document.removeEventListener('visibilitychange', onHidden);
-    };
+    media.addEventListener('change', resize);
+    return () => media.removeEventListener('change', resize);
   }, []);
-
-  useEffect(() => {
-    if (!error) return;
-    const timer = setTimeout(() => useAppStore.getState().setError(null), 9000);
-    return () => clearTimeout(timer);
-  }, [error]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+      if (event.defaultPrevented || event.repeat || document.querySelector('[role=dialog]') || target?.closest('input,textarea,select,[contenteditable=true]')) {
         return;
       }
+      if (event.code === 'Space' && target?.closest('button,a,[role=button],[role=switch]')) return;
       const store = useAppStore.getState();
       const locked = store.playback.mode !== 'idle';
       if (event.code === 'Space') {
@@ -135,6 +100,16 @@ export default function App() {
   return (
     <div className="app">
       <TopBar />
+      <div className={`save-status ${persistence.state.kind}`} role="status" aria-live="polite">
+        <span>{persistence.state.message ?? ({ saved: 'Saved on this device', pending: 'Saving?', off: 'Autosave off ? export to keep your work' } as Record<string, string>)[persistence.state.kind]}</span>
+        {persistence.state.kind === 'conflict' && <button onClick={() => {
+          if (window.confirm('Load the newer saved scene? Export this tab?s work first if you want to keep it.')) persistence.load();
+        }}>Load newer save</button>}
+        {persistence.state.kind === 'corrupt' && <>
+          <button onClick={persistence.recover}>Download damaged save</button>
+          <button onClick={() => { if (window.confirm('Preserve a backup and replace the damaged save with this scene?')) persistence.replace(); }}>Use this scene</button>
+        </>}
+      </div>
       <div className={workspaceClass}>
         {panels.left && <LeftPanel />}
         <main className="viewport-wrap">
@@ -165,7 +140,7 @@ export default function App() {
       {panels.chart && <ChartDrawer />}
       {error && (
         <div className="toast" role="alert">
-          <span><b>Solver error.</b> {error}</span>
+          <span><b>Attention.</b> {error}</span>
           <button onClick={() => useAppStore.getState().setError(null)} aria-label="Dismiss"><Icon name="close" size={14} /></button>
         </div>
       )}

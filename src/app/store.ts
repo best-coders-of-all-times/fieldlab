@@ -115,6 +115,7 @@ interface AppState {
   inductionTelemetry: InductionTelemetry[];
   chart: { series: string[]; points: TimeSeriesPoint[] };
   error: string | null;
+  graphicsError: string | null;
   panels: { left: boolean; right: boolean; chart: boolean; theory: boolean };
   rightTab: 'inspector' | 'display' | 'simulation' | 'theory' | 'measure';
   leftTab: 'scenes' | 'add';
@@ -234,7 +235,8 @@ export const useAppStore = create<AppState>((set, get) => {
     inductionTelemetry: [],
     chart: { series: [], points: [] },
     error: null,
-    panels: { left: true, right: true, chart: false, theory: true },
+    graphicsError: null,
+    panels: { left: typeof window === 'undefined' || window.innerWidth > 1050, right: typeof window === 'undefined' || window.innerWidth > 1050, chart: false, theory: true },
     rightTab: 'inspector',
     leftTab: 'scenes',
     cameraRequest: 0,
@@ -391,7 +393,7 @@ export const useAppStore = create<AppState>((set, get) => {
         scene: {
           ...prev,
           objects: prev.objects.map((obj) =>
-            obj.id === id ? ({ ...obj, ...patch } as SceneObject) : obj,
+            obj.id === id ? normalizeObjectPatch(obj, patch) : obj,
           ),
         },
       });
@@ -535,7 +537,12 @@ export const useAppStore = create<AppState>((set, get) => {
         points: points.slice(-900),
       },
     })),
-    togglePanel: (key) => set((state) => ({ panels: { ...state.panels, [key]: !state.panels[key] } })),
+    togglePanel: (key) => set((state) => ({ panels: {
+      ...state.panels,
+      ...(typeof window !== 'undefined' && window.innerWidth <= 1050 && !state.panels[key]
+        ? key === 'left' ? { right: false } : key === 'right' ? { left: false } : {} : {}),
+      [key]: !state.panels[key],
+    } })),
     setRightTab: (rightTab) => set({ rightTab }),
     setLeftTab: (leftTab) => set({ leftTab }),
     requestCamera: (cameraMode) => set((state) => ({
@@ -577,6 +584,19 @@ export const useAppStore = create<AppState>((set, get) => {
 
 export function newObjectId(prefix = 'obj'): string {
   return uid(prefix);
+}
+
+function normalizeObjectPatch(obj: SceneObject, patch: Partial<SceneObject>): SceneObject {
+  const next = { ...obj, ...patch } as SceneObject;
+  next.name = next.name.trim() || obj.name.trim() || obj.kind;
+  if (next.kind === 'particle' && next.dynamics) {
+    const p = patch as Partial<typeof next>;
+    // Top-level particle fields are canonical; body edits update both representations.
+    if (p.dynamics && p.mass === undefined) next.mass = p.dynamics.mass;
+    if (p.dynamics && p.velocity === undefined) next.velocity = [...p.dynamics.velocity];
+    next.dynamics = { ...next.dynamics, mass: next.mass, velocity: [...next.velocity] };
+  }
+  return next;
 }
 
 export function presetList() {

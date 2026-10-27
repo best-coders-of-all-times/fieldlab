@@ -54,7 +54,7 @@ export function LeftPanel() {
     const q = query.trim().toLowerCase();
     if (!q) return PRESETS;
     return PRESETS.filter((p) =>
-      `${p.title} ${p.subtitle} ${p.description} ${p.tags.join(' ')} ${p.group}`.toLowerCase().includes(q),
+      `${p.title} ${p.subtitle} ${p.description} ${p.tags.join(' ')} ${p.group} ${JSON.stringify(p.create().theory ?? {})}`.toLowerCase().includes(q),
     );
   }, [query]);
 
@@ -96,6 +96,7 @@ export function LeftPanel() {
 
   return (
     <aside className="left-panel">
+      <button className="drawer-close" onClick={() => useAppStore.getState().togglePanel('left')} aria-label="Close library">Close library</button>
       <div className="panel-tabs">
         <button className={leftTab === 'scenes' ? 'active' : ''} onClick={() => setLeftTab('scenes')}>
           <Icon name="book" size={13} /> Scenes
@@ -126,6 +127,7 @@ export function LeftPanel() {
                 placeholder="Search scenes, topics, equations…"
                 aria-label="Search scenes"
               />
+              {query && <button className="mini-btn" onClick={() => setQuery('')} aria-label="Clear search">?</button>}
             </div>
             {Array.from(groups.entries()).map(([group, presets]) => (
               <div key={group}>
@@ -178,7 +180,7 @@ export function LeftPanel() {
               </>
             )}
             <div className="add-note">
-              Objects are placed at the centre. Click a selected object and drag the gizmo to position it.
+              Objects are placed near the centre with a small horizontal offset to avoid overlap. Click a selected object and drag the gizmo to position it.
               Statics scenes re-solve automatically; waves restart the FDTD lattice when matter changes.
             </div>
             <div className="group-label">Objects in scene</div>
@@ -187,13 +189,10 @@ export function LeftPanel() {
                 <div
                   key={obj.id}
                   className={`object-row ${selectedId === obj.id ? 'active' : ''}`}
-                  role="button"
-                  tabIndex={0}
                   onClick={() => select(obj.id)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') select(obj.id); }}
                 >
                   <span className="obj-icon"><Icon name={KIND_ICON[obj.kind] ?? 'sphere'} size={14} /></span>
-                  <span className="obj-name">{obj.name}</span>
+                  <button className="obj-name object-select" onClick={() => select(obj.id)}>{obj.name}</button>
                   <span className="obj-kind">{obj.kind}</span>
                   <button
                     className="mini-btn"

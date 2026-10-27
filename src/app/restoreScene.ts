@@ -1,5 +1,6 @@
 import type { PlaybackFps, PlaybackSettings, Scene } from '../scene/types';
 import { defaultPlayback } from '../scene/defaults';
+import { sceneValidationError } from '../scene/validation';
 
 const PLAYBACK_FPS: PlaybackFps[] = [12, 24, 30, 60];
 
@@ -33,6 +34,7 @@ export function normalizePlaybackSettings(value: unknown, fallback = defaultPlay
  * not enough; nested records are filled from `base`.
  */
 export function restoreScene(saved: unknown, base: Scene): Scene | null {
+  if (sceneValidationError(saved)) return null;
   if (!saved || typeof saved !== 'object') return null;
   const value = saved as Partial<Scene>;
   if (!Array.isArray(value.objects)) return null;

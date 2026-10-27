@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "id": "scene-mvpgz5cl-5",
+  "name": "Solenoid",
+  "subtitle": "Uniform interior field",
+  "description": "A helical coil carrying 4 A.",
+  "mode": "fields",
+  "tags": [],
+  "domain": {
+    "center": [
+      0,
+      0,
+      0
+    ],
+    "size": [
+      1,
+      1,
+      1
+    ]
+  },
+  "objects": [
+    {
+      "id": "coil-mvpgz5cl-6",
+      "kind": "coil",
+      "name": "Solenoid",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "visible": true,
+      "electricalModel": "impressed",
+      "conductivity": 0.01,
+      "radius": 0.085,
+      "length": 0.44,
+      "turns": 14,
+      "current": 4,
+      "wireRadius": 0.006,
+      "axis": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "id": "probe-mvpgz5cl-7",
+      "kind": "probe",
+      "name": "Field probe",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "visible": true,
+      "quantity": "E"
+    }
+  ],
+  "display": {
+    "fieldLines": "B",
+    "lineCount": 48,
+    "arrows": "B",
+    "arrowDensity": 9,
+    "slices": {
+      "xy": false,
+      "xz": true,
+      "yz": false
+    },
+    "slicePositions": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "sliceQuantity": "Bmag",
+    "sliceOpacity": 0.88,
+    "sliceResolution": 160,
+    "showGrid": true,
+    "showAxes": true,
+    "showDomain": true,
+    "showBoundCurrent": false,
+    "showProbeLabels": true,
+    "conductorOpacity": 1,
+    "colormap": "magnetic",
+    "logScale": false,
+    "autoRange": true,
+    "range": null,
+    "vectorScale": 1
+  },
+  "simulation": {
+    "useApproximation": true,
+    "resolution": 64,
+    "staticBoundary": "open",
+    "externalField": [
+      0,
+      0,
+      0
+    ],
+    "externalB": [
+      0,
+      0,
+      0
+    ],
+    "boundary": {
+      "x": "pml",
+      "y": "pml",
+      "z": "pml"
+    },
+    "pmlCells": 10,
+    "cfl": 0.9,
+    "stepsPerFrame": 2,
+    "timeScale": 1,
+    "playback": {
+      "startTime": 0,
+      "endTime": 1e-8,
+      "sampleMode": "count",
+      "sampleCount": 120,
+      "sampleInterval": 1e-10,
+      "fps": 30,
+      "loop": true
+    }
+  },
+  "theory": {
+    "title": "Solenoid and stored magnetic energy",
+    "body": "Inside an ideal long solenoid B=μ₀nI, nearly independent of position. The inductance grows as N², so the stored energy ½LI² grows rapidly with turn count.",
+    "equations": [
+      "B=\\mu_0 n I=\\mu_0\\frac{N}{\\ell}I",
+      "L\\approx\\frac{\\mu_0N^2A}{\\ell}",
+      "U=\\tfrac12LI^2=\\int\\frac{B^2}{2\\mu_0}dV"
+    ],
+    "prompts": [
+      "Read B at the centre and near an end: where does it start to fringe?",
+      "Triple the current. By what factor does the stored energy change?",
+      "Remove turns and compare the interior field."
+    ]
+  },
+  "camera": {
+    "position": [
+      1.55,
+      1.15,
+      1.55
+    ],
+    "target": [
+      0,
+      0,
+      0
+    ],
+    "orthographic": false
+  }
+}

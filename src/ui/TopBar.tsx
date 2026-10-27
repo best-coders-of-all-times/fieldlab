@@ -3,6 +3,8 @@ import { useAppStore } from '../app/store';
 import { Icon } from './Icon';
 import { formatSci } from '../engine/units';
 import { HelpModal } from './HelpModal';
+import { sceneFilename, downloadText } from '../scene/files';
+import { sceneValidationError } from '../scene/validation';
 import { restoreScene } from '../app/restoreScene';
 
 export function TopBar() {
@@ -10,6 +12,7 @@ export function TopBar() {
   const playing = useAppStore((s) => s.playing);
   const time = useAppStore((s) => s.time);
   const fps = useAppStore((s) => s.fps);
+  const graphicsError = useAppStore(s => s.graphicsError);
   const status = useAppStore((s) => s.status);
   const panels = useAppStore((s) => s.panels);
   const setPlaying = useAppStore((s) => s.setPlaying);
@@ -36,31 +39,30 @@ export function TopBar() {
 
   const exportScene = () => {
     const data = JSON.stringify(useAppStore.getState().scene, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${useAppStore.getState().scene.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.fieldlab.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadText(data, sceneFilename(useAppStore.getState().scene.name));
   };
 
   const importScene = async (file: File) => {
     try {
+      if (file.size > 10 * 1024 * 1024) throw new Error('File exceeds the 10 MB scene limit.');
       const text = await file.text();
       const parsed = JSON.parse(text);
       if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.objects)) {
         throw new Error('Not a FieldLab scene file.');
       }
+      const issue = sceneValidationError(parsed);
+      if (issue) throw new Error(issue);
       const restored = restoreScene(parsed, useAppStore.getState().scene);
       if (!restored) throw new Error('Invalid scene settings.');
+      if (!window.confirm('Import this scene? Your current scene will remain available through Undo.')) return;
+      useAppStore.getState().setError(null);
       useAppStore.getState().setScene(restored, { presetId: null, history: true });
     } catch (err) {
-      useAppStore.getState().setError(err instanceof Error ? err.message : String(err));
+      useAppStore.getState().setError(`Import failed (${file.name}): ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
-  const statusLabel = computing
+  const statusLabel = graphicsError ? 'graphics unavailable' : computing
     ? `precomputing ${playback.framesDone}/${playback.totalFrames}`
     : playback.mode === 'cached'
       ? `cached ${playback.frameIndex + 1}/${playback.frameCount}`
@@ -73,7 +75,7 @@ export function TopBar() {
           : status.phase === 'error'
             ? 'error'
             : 'idle';
-  const statusClass = computing ? 'solving' : playback.mode === 'cached' ? 'ready playback' : status.phase;
+  const statusClass = graphicsError ? 'error' : computing ? 'solving' : playback.mode === 'cached' ? 'ready playback' : status.phase;
 
   return (
     <>
@@ -123,7 +125,7 @@ export function TopBar() {
         <span className="top-spacer" />
 
         <div className="top-actions">
-          <button className="icon-btn" onClick={resetScene} disabled={locked || presetId === null} title="Restore preset (discard scene edits)" aria-label="Restore preset">
+          <button className="icon-btn" onClick={() => { if (window.confirm('Restore this preset and discard scene edits? You can undo this action.')) resetScene(); }} disabled={locked || presetId === null} title="Restore preset (discard scene edits)" aria-label="Restore preset">
             <Icon name="reset" size={16} />
           </button>
           <button className="icon-btn" onClick={undo} disabled={locked || past === 0} title="Undo (Ctrl+Z)">
@@ -170,6 +172,16 @@ export function TopBar() {
               e.currentTarget.value = '';
             }}
           />
+          <a
+            className="icon-btn github-link"
+            href="https://github.com/best-coders-of-all-times/fieldlab"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View source on GitHub"
+            aria-label="View source on GitHub"
+          >
+            <Icon name="github" size={16} />
+          </a>
           <button className="icon-btn" onClick={() => setHelp(true)} title="Help & shortcuts">
             <Icon name="help" size={16} />
           </button>

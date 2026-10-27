@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  page.on('dialog', dialog => dialog.accept());
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     const frames: any[] = [];
@@ -34,6 +35,7 @@ test('applied fields change samples and incoming field lines; probes expose vect
   await expect(page.locator('.status-chip.ready')).toBeVisible();
   await page.getByRole('button', { name: 'Data', exact: true }).click();
   await page.getByRole('button', { name: 'Add probe here', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
   const position = page.getByRole('group', { name: 'Position', exact: true }).getByRole('spinbutton');
   await position.nth(0).fill('0.3');
   await position.nth(1).fill('0.2');

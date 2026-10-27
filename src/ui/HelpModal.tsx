@@ -1,10 +1,32 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Icon } from './Icon';
 
 export function HelpModal({ onClose }: { onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current!;
+    const app = document.querySelector('.workspace') as HTMLElement | null;
+    if (app) app.inert = true;
+    dialog.querySelector<HTMLElement>('button')?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRef.current(); }
+      if (event.key === 'Tab') {
+        const controls = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),[tabindex="0"]')];
+        const first = controls[0], last = controls.at(-1);
+        if (!first) { event.preventDefault(); dialog.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', key, true);
+    return () => { document.removeEventListener('keydown', key, true); if (app) app.inert = false; previous?.focus(); };
+  }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Help">
+      <div ref={dialogRef} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-label="Help">
         <div className="modal-head">
           <Icon name="help" size={18} />
           <span className="modal-title">FieldLab quick guide</span>
@@ -68,6 +90,7 @@ export function HelpModal({ onClose }: { onClose: () => void }) {
             and induction stepping also run locally in the browser. Large scenes can reduce refresh
             rates on your device. Other visitors do not share a physics server with you.
           </p>
+          <h3>Touch controls</h3><p>Drag with one finger to orbit. Use two fingers to pan or pinch to zoom. Open the library or inspector from the toolbar; close the drawer to return to the field view.</p>
           <h3>Units</h3>
           <p>
             Everything is SI. The viewport normalises colours and arrow lengths for readability; the

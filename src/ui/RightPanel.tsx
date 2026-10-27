@@ -11,6 +11,7 @@ import {
   EmptyState,
   Field,
   NumberInput,
+  NameInput,
   PanelSection,
   Segmented,
   Select,
@@ -52,6 +53,7 @@ export function RightPanel() {
   ];
   return (
     <aside className="right-panel">
+      <button className="drawer-close" onClick={() => useAppStore.getState().togglePanel('right')} aria-label="Close inspector">Close inspector</button>
       <div className="right-tabs">
         {tabs.map((t) => (
           <button key={t.id} className={rightTab === t.id ? 'active' : ''} onClick={() => setRightTab(t.id)}>
@@ -123,11 +125,7 @@ function Inspector() {
     <>
       <PanelSection title={obj.name} right={<span className="preset-tag">{obj.kind}</span>}>
         <Field label="Name">
-          <input
-            className="select"
-            value={obj.name}
-            onChange={(e) => patch({ name: e.target.value }, false)}
-          />
+          <NameInput key={obj.id} value={obj.name} onCommit={name => patch({ name }, false)} />
         </Field>
         <CheckRow label="Visible" checked={obj.visible} onChange={(v) => patch({ visible: v }, false)} />
         <Field label="Position" hint="World coordinates, metres">
@@ -1073,6 +1071,6 @@ function CoordinateProbe() {
   const [position, setPosition] = useState<[number, number, number]>([0, 0, 0]);
   return <>
     <Field label="Sample at coordinate" hint="World x, y, z in metres"><Vec3Input value={position} onChange={setPosition} unit="m" /></Field>
-    <Button onClick={() => useAppStore.getState().addObject(makeProbe(position))}>Add probe here</Button>
+    <Button onClick={() => { useAppStore.getState().addObject(makeProbe(position)); useAppStore.getState().setRightTab('measure'); }}>Add probe here</Button>
   </>;
 }

@@ -33,6 +33,8 @@ const QUANTITY_UNIT: Record<SliceQuantity, string> = {
 export function ViewportView() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<ViewportController | null>(null);
+  const graphicsError = useAppStore(s => s.graphicsError);
+  const [generation, setGeneration] = useState(0);
   const scene = useAppStore((s) => s.scene);
   const fullMaxwell = scene.simulation.useApproximation === false;
   const selectedId = useAppStore((s) => s.selectedId);
@@ -55,7 +57,9 @@ export function ViewportView() {
 
   useEffect(() => {
     if (!wrapRef.current) return;
-    const controller = new ViewportController(wrapRef.current, {
+    let controller: ViewportController;
+    try {
+    controller = new ViewportController(wrapRef.current, {
       onSelect: (id) => useAppStore.getState().select(id),
       onTransform: (id, position, rotation) => {
         useAppStore.getState().updateObject(id, { position, rotation }, false);
@@ -63,14 +67,30 @@ export function ViewportView() {
       onFps: (value) => useAppStore.getState().setFps(value),
       onSliceRange: (range) => setLegend(range),
     });
+    } catch {
+      useAppStore.setState({ graphicsError: 'WebGL is unavailable. Enable hardware acceleration or try another browser. You can still edit and export your scene.', playing: false });
+      return;
+    }
+    useAppStore.setState({ graphicsError: null });
     controllerRef.current = controller;
+    const canvas = wrapRef.current.querySelector('canvas')!;
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', '3D electromagnetic field view');
+    canvas.setAttribute('aria-describedby', 'field-summary');
+    canvas.tabIndex = 0;
+    const lost = (event: Event) => {
+      event.preventDefault();
+      useAppStore.setState({ graphicsError: 'Graphics context lost. Retry the field view to recover. Your scene is preserved.', playing: false });
+    };
+    canvas.addEventListener('webglcontextlost', lost);
     controller.setScene(useAppStore.getState().scene);
     controller.setSelected(useAppStore.getState().selectedId);
     return () => {
+      canvas.removeEventListener('webglcontextlost', lost);
       controller.dispose();
       controllerRef.current = null;
     };
-  }, []);
+  }, [generation]);
 
   useEffect(() => {
     controllerRef.current?.setScene(scene);
@@ -100,7 +120,12 @@ export function ViewportView() {
 
   return (
     <div className="viewport" ref={wrapRef}>
-      <div className="viewport-overlay">
+      <p id="field-summary" className="sr-only">{scene.name}. {scene.objects.length} objects. Field lines: {scene.display.fieldLines}. Arrows: {scene.display.arrows}. Slice: {scene.display.sliceQuantity}. Open Data for numeric probe values. Use camera buttons for standard views.</p>
+      {graphicsError && <div className="graphics-fallback" role="alert">
+        <strong>Field view unavailable</strong><p>{graphicsError}</p>
+        <button className="btn btn-primary" onClick={() => { setGeneration(g => g + 1); useAppStore.setState(s => ({ resetRequest: s.resetRequest + 1 })); }}>Retry field view</button>
+      </div>}
+      <div className="viewport-overlay" hidden={!!graphicsError}>
         <div className="vp-top-left">
           <span className="vp-chip"><span className="dot" /><b>{fullMaxwell ? 'Maxwell FDTD' : scene.mode === 'fields' ? 'Fields' : 'Waves'}</b> · {fullMaxwell || scene.mode === 'waves' ? 'time-domain Maxwell' : 'static / quasistatic'}</span>
           {hasSlice && <span className="vp-chip">{QUANTITY_LABEL[q]} slice · {QUANTITY_UNIT[q]}</span>}

@@ -1,5 +1,19 @@
-import React, { useEffect, useId, useState } from 'react';
+import React, { useEffect, useId, useState, createContext, useContext } from 'react';
 import { formatSci, parseNumber } from '../engine/units';
+
+const FieldLabel = createContext<string | undefined>(undefined);
+
+/** Keep partially typed names local until the user commits the edit. */
+export function NameInput({ value, onCommit }: { value: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  const label = useContext(FieldLabel);
+  useEffect(() => setDraft(value), [value]);
+  return <input className="select" aria-label={label} value={draft}
+    onChange={event => setDraft(event.target.value)}
+    onBlur={() => { const next = draft.trim() || value; setDraft(next); onCommit(next); }}
+    onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur();
+      if (event.key === 'Escape') { event.preventDefault(); setDraft(value); } }} />;
+}
 
 export function PanelSection({
   title,
@@ -15,23 +29,12 @@ export function PanelSection({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className={`section ${open ? 'is-open' : ''}`}>
-      <div
-        className="section-head"
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            setOpen((v) => !v);
-          }
-        }}
-      >
-        <span className={`chev ${open ? 'open' : ''}`} aria-hidden>▸</span>
-        <span>{title}</span>
-        {right && <span className="section-right" onClick={(e) => e.stopPropagation()}>{right}</span>}
+      <div className="section-head">
+        <button type="button" className="section-toggle" aria-expanded={open} onClick={() => setOpen(v => !v)}>
+          <span className={`chev ${open ? 'open' : ''}`} aria-hidden>?</span>
+          <span>{title}</span>
+        </button>
+        {right && <span className="section-right">{right}</span>}
       </div>
       {open && <div className="section-body">{children}</div>}
     </section>
@@ -55,7 +58,11 @@ export function Field({
         {label}
         {hint && <span className="field-hint" title={hint}>?</span>}
       </span>
-      <span className="field-control">{children}</span>
+      <span className="field-control"><FieldLabel.Provider value={label}>{React.Children.map(children, child => {
+        if (React.isValidElement(child) && typeof child.type === 'string' && ['input', 'select', 'textarea'].includes(child.type))
+          return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, { 'aria-label': (child.props as Record<string, unknown>)['aria-label'] ?? label });
+        return child;
+      })}</FieldLabel.Provider></span>
     </div>
   );
 }
@@ -80,6 +87,7 @@ export function Slider({
   return (
     <div className={`slider ${disabled ? 'disabled' : ''}`}>
       <input
+        aria-label={useContext(FieldLabel)}
         type="range"
         min={min}
         max={max}
@@ -118,6 +126,7 @@ export function NumberInput({
   return (
     <span className="number-input">
       <input
+        aria-label={useContext(FieldLabel)}
         type="text"
         value={text}
         disabled={disabled}
@@ -194,7 +203,7 @@ export function Select<T extends string>({
   disabled?: boolean;
 }) {
   return (
-    <select className="select" value={value} onChange={(e) => onChange(e.target.value as T)} disabled={disabled}>
+    <select aria-label={useContext(FieldLabel)} className="select" value={value} onChange={(e) => onChange(e.target.value as T)} disabled={disabled}>
       {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   );
@@ -209,11 +218,13 @@ export function Toggle({
   onChange: (v: boolean) => void;
   label?: string;
 }) {
+  const fieldLabel = useContext(FieldLabel);
   return (
     <button
       type="button"
       className={`toggle ${checked ? 'on' : ''}`}
       role="switch"
+      aria-label={label ?? fieldLabel}
       aria-checked={checked}
       onClick={() => onChange(!checked)}
     >
@@ -237,7 +248,7 @@ export function CheckRow({
   return (
     <div className="check-row">
       <span className="check-label" title={hint}>{label}</span>
-      <Toggle checked={checked} onChange={onChange} />
+      <FieldLabel.Provider value={label}><Toggle checked={checked} onChange={onChange} /></FieldLabel.Provider>
     </div>
   );
 }
